@@ -1,0 +1,18 @@
+{
+  "servers": {
+    "nexacode": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["${workspaceFolder}/dist-server/mcp.js"],
+      "env": {
+        "NEXACODE_API_URL": "http://localhost:4000",
+        "NEXACODE_USER_TOKEN": "${input:nexacode-user-token}",
+        "DATABASE_URL": "${input:nexacode-database-url}"
+      }
+    }
+  },
+  "inputs": [
+    { "id": "nexacode-user-token", "type": "promptString", "description": "NexaCode API bearer token for progress tools", "password": true },
+    { "id": "nexacode-database-url", "type": "promptString", "description": "Local NexaCode PostgreSQL connection URL", "password": true }
+  ]
+}
