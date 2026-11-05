@@ -12,7 +12,7 @@ All routes use the `/api` prefix. JSON bodies are validated with Zod, request si
 | GET | `/problems` | No | Search/filter/paginate starter problems |
 | GET | `/problems/:slug` | No | Problem statement |
 | GET | `/problems/:slug/solution` | Yes | Reference solution after an accepted submission |
-| POST | `/run` | No | Bounded Judge0 run |
+| POST | `/run` | No | Bounded run through the configured Judge0/Piston runner |
 | POST | `/problems/:slug/run` | No | Visible sample tests for supported problems |
 | POST | `/problems/:slug/submit` | Yes | Hidden tests, persist verdict |
 | GET | `/progress` | Yes | Accepted counts and topic summary |
@@ -25,4 +25,6 @@ All routes use the `/api` prefix. JSON bodies are validated with Zod, request si
 | PUT | `/study-plans/me` | Yes | Start or restart a 30/60 day plan |
 | POST | `/ai/ask` | Yes | SSE tutor response and source events |
 
-The AI tutor endpoint is intentionally unavailable without a configured database, ingested chunks, and provider settings. Current hidden-test wrappers cover five JavaScript/TypeScript problems; other problem slugs report missing wrappers or tests instead of returning a fabricated verdict.
+`POST /run` accepts JavaScript, TypeScript, Python, Java, C, C++, C#, Go, Rust, PHP, Ruby, and Kotlin. Non-JavaScript programs receive the submitted stdin and must print their result to stdout. Problem runs/submissions provide each test case as a JSON object on stdin for standalone languages; JavaScript/TypeScript solutions use the problem's named-function contract.
+
+The AI tutor endpoint is intentionally unavailable without a configured database, ingested chunks, and provider settings.

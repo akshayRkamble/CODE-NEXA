@@ -14,9 +14,19 @@ Use a separate managed or Docker-based host for PostgreSQL and Judge0. The inclu
 
 Configure `JUDGE0_URL` and `JUDGE0_AUTH_TOKEN` on the API. Review `judge0.conf.example`, change every placeholder, and keep the execution endpoint private. The frontend never receives the Judge0 token. Verify your deployment's CPU, memory, process, network, and queue limits before accepting untrusted code.
 
+For local development, set `CODE_RUNNER=judge0`, `JUDGE0_URL=http://localhost:2358`, and make `JUDGE0_AUTH_TOKEN` match `AUTHN_TOKEN` in `judge0.conf`. Copy `judge0.conf.example` to `judge0.conf`, replace its placeholders, and start the local multi-language runner:
+
+```powershell
+docker compose --profile execution up -d judge0-db judge0-redis judge0-server judge0-worker
+```
+
+The Judge0 image provides the compiler/runtime dependencies for all 12 editor languages; no language toolchains need to be installed in the API or frontend containers. Piston is an optional development alternative only when its matching runtimes have been installed. For local Piston use, set `CODE_RUNNER=piston` and `PISTON_URL=http://localhost:2000`, install every runtime version listed in [server/piston-runner.ts](../server/piston-runner.ts), and keep its API bound to loopback. Piston requires a privileged container for isolation; never expose it publicly. Kotlin compilation also needs a 1 GiB compile-memory limit and 60-second compile CPU/timeout limits. Production always uses Judge0.
+
 ## AI provider
 
-Set `AI_BASE_URL`, `AI_MODEL`, `EMBEDDING_MODEL`, `RAG_PROVIDER`, and server-only `AI_API_KEY` (or configure Ollama on a private network). Install the database vector extension and run `npm run ingest`. Set provider spend limits and review the provider's data-retention terms before enabling the tutor for users. Code and questions are sent to that provider when the tutor is used.
+The coding-problem solver uses Google Gemini. Set `GOOGLE_AI_API_KEY`; optionally set `GEMINI_MODEL` (defaults to `gemini-3-flash-preview`). For Gemini-powered tutoring and embeddings, also set `RAG_PROVIDER=google`, `AI_MODEL=gemini-3-flash-preview`, and `EMBEDDING_MODEL=gemini-embedding-001`. The Google key remains server-side. OpenAI-compatible providers use `AI_BASE_URL` and `AI_API_KEY`; Ollama can be configured for local models. Install the database vector extension and run `npm run ingest`. Set provider spend limits and review its data-retention terms before enabling the tutor for users. Code and questions are sent to the selected provider when the tutor is used.
+
+After configuring the provider and database, run `npm run ingest` to build the retrieval index. Check `/api/ai/status` before enabling the tutor; it reports provider configuration and index readiness without exposing credentials. Keep provider billing/quota active for both embedding ingestion and chat requests.
 
 ## MCP remote transport
 

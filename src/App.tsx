@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 import Editor, { type Monaco } from '@monaco-editor/react';
+import Icon, { type IconName } from './Icon';
 import SqlWorkbench from './SqlWorkbench';
 import TutorPanel from './TutorPanelWithFeedback';
 import ProgressDashboard from './ProgressDashboard';
 import AuthDialog, { type SessionUser } from './AuthDialogFixed';
+import { balancedBracketsStarters } from './problemLanguageStarters';
 type Problem={id:number;slug:string;title:string;level:string;topic:string;description:string;starter:string;sample:string;hints:string[]};
 const problems=[
 {id:1,title:'Pair Sum',level:'Easy',topic:'Arrays & Hashing',description:'Given a list of integers and a target value, return the indices of two distinct entries whose values add up to the target. Assume exactly one pair exists.',starter:'function pairSum(values, target) {\n  // Your solution\n}\n\nconsole.log(pairSum([4, 1, 8, 3], 7));',sample:'Input: [4, 1, 8, 3], target = 7\nOutput: [0, 3]',hints:['Try checking every pair first.','Store values already visited in a map.','Look for target - x before storing x.']},
@@ -21,6 +23,7 @@ const problems=[
 ];
 const slugById:Record<number,string>={1:'pair-sum',2:'balanced-brackets',3:'longest-unique-window',4:'merge-time-blocks',5:'widest-tree-level',6:'ways-up-the-steps',7:'rotate-grid',8:'graph-reachability',9:'minimum-coin-count',10:'find-a-cycle',11:'product-except-self',12:'search-sorted-grid'};
 const langList=[['javascript','JavaScript'],['typescript','TypeScript'],['python','Python'],['java','Java'],['c','C'],['cpp','C++'],['csharp','C#'],['go','Go'],['rust','Rust'],['php','PHP'],['ruby','Ruby'],['kotlin','Kotlin']];
+const activityItems: {name:string;icon:IconName}[]=[{name:'Practice',icon:'practice'},{name:'Editor',icon:'editor'},{name:'SQL',icon:'sql'},{name:'Progress',icon:'progress'}];
 const standaloneStarters:Record<string,string>={
  python:'import json\nimport sys\n\ninput_data = json.loads(sys.stdin.read())\n\ndef solve(data):\n    # Return the result as a JSON-compatible value.\n    return None\n\nprint(json.dumps(solve(input_data), separators=(\",\", \":\")))',
  java:'import java.nio.charset.StandardCharsets;\n\npublic class Main {\n    public static void main(String[] args) throws Exception {\n        String input = new String(System.in.readAllBytes(), StandardCharsets.UTF_8);\n        // Parse the JSON input and print the result as JSON.\n        System.out.println(\"null\");\n    }\n}',
@@ -33,9 +36,11 @@ const standaloneStarters:Record<string,string>={
  ruby:'require \"json\"\ninput_data = JSON.parse(STDIN.read)\ndef solve(data)\n  # Return the result as a JSON-compatible value.\n  nil\nend\nputs JSON.generate(solve(input_data))',
  kotlin:'import java.io.BufferedReader\n\nfun main() {\n    val input = generateSequence(::readLine).joinToString(\"\\\\n\")\n    // Parse the JSON input and print the result as JSON.\n    println(\"null\")\n}'
 };
-const starterFor=(language:string, javascriptStarter:string)=>['javascript','typescript'].includes(language)?javascriptStarter:standaloneStarters[language]||'// Read the JSON test input from stdin and print the JSON result to stdout.';
+const starterFor=(language:string,javascriptStarter:string)=>/function isBalanced\s*\(/.test(javascriptStarter)?balancedBracketsStarters[language]||javascriptStarter:['javascript','typescript'].includes(language)?javascriptStarter:standaloneStarters[language]||'// Read the JSON test input from stdin and print the JSON result to stdout.';
 export default function App(){
- const [problemList,setProblemList]=useState<Problem[]>(()=>problems.map(p=>({...p,slug:slugById[p.id]}))),[view,setView]=useState('Practice'),[problem,setProblem]=useState<Problem>(()=>({...problems[0],slug:slugById[1]})),[filter,setFilter]=useState('All'),[search,setSearch]=useState(''),[language,setLanguage]=useState(()=>localStorage.getItem('nexa-language')||'javascript'),[tab,setTab]=useState('Description'),[code,setCode]=useState(()=>{const initialLanguage=localStorage.getItem('nexa-language')||'javascript',saved=localStorage.getItem(`nexa-code-1-${initialLanguage}`);return saved||(['javascript','typescript'].includes(initialLanguage)?localStorage.getItem('nexa-code-1')||problems[0].starter:starterFor(initialLanguage,problems[0].starter))}),[output,setOutput]=useState('Ready when you are. Run your code to see output.'),[referenceSolution,setReferenceSolution]=useState<string|null>(null),[referenceAvailable,setReferenceAvailable]=useState(false),[solved,setSolved]=useState<number[]>(()=>JSON.parse(localStorage.getItem('nexa-solved')||'[]')),[font,setFont]=useState(()=>Number(localStorage.getItem('nexa-font-size'))||13),[hints,setHints]=useState<Record<number,number>>({}),[theme,setTheme]=useState(()=>localStorage.getItem('nexa-theme')==='light'),[bookmarks,setBookmarks]=useState<string[]>(()=>JSON.parse(localStorage.getItem('nexa-bookmarks')||'[]')),[note,setNote]=useState(()=>localStorage.getItem('note-1')||''),[authOpen,setAuthOpen]=useState(false),[user,setUser]=useState<SessionUser|null>(null);
+ const [questionsVisible,setQuestionsVisible]=useState(true);
+ const [codingPanelMode,setCodingPanelMode]=useState<'normal'|'maximized'|'minimized'>('normal');
+ const [problemList,setProblemList]=useState<Problem[]>(()=>problems.map(p=>({...p,slug:slugById[p.id]}))),[view,setView]=useState('Practice'),[problem,setProblem]=useState<Problem>(()=>({...problems[0],slug:slugById[1]})),[filter,setFilter]=useState('All'),[search,setSearch]=useState(''),[language,setLanguage]=useState(()=>localStorage.getItem('nexa-language')||'javascript'),[tab,setTab]=useState('Description'),[consoleTab,setConsoleTab]=useState<'Testcase'|'Test Result'>('Testcase'),[splitPercent,setSplitPercent]=useState(47),[consoleHeight,setConsoleHeight]=useState(225),[code,setCode]=useState(()=>{const initialLanguage=localStorage.getItem('nexa-language')||'javascript',saved=localStorage.getItem(`nexa-code-1-${initialLanguage}`);return saved||(['javascript','typescript'].includes(initialLanguage)?localStorage.getItem('nexa-code-1')||problems[0].starter:starterFor(initialLanguage,problems[0].starter))}),[output,setOutput]=useState('Ready when you are. Run your code to see output.'),[referenceSolution,setReferenceSolution]=useState<string|null>(null),[referenceAvailable,setReferenceAvailable]=useState(false),[solved,setSolved]=useState<number[]>(()=>JSON.parse(localStorage.getItem('nexa-solved')||'[]')),[font,setFont]=useState(()=>Number(localStorage.getItem('nexa-font-size'))||13),[hints,setHints]=useState<Record<number,number>>({}),[theme,setTheme]=useState(()=>localStorage.getItem('nexa-theme')==='light'),[bookmarks,setBookmarks]=useState<string[]>(()=>JSON.parse(localStorage.getItem('nexa-bookmarks')||'[]')),[note,setNote]=useState(()=>localStorage.getItem('note-1')||''),[authOpen,setAuthOpen]=useState(false),[aiSolveBusy,setAiSolveBusy]=useState(false),[user,setUser]=useState<SessionUser|null>(null);
  useEffect(()=>{let active=true;(async()=>{try{const first=await fetch('/api/problems?page=1&limit=100').then(r=>r.ok?r.json():null);if(!first?.items?.length)return;let items=[...first.items];for(let page=2;page<=Math.ceil(first.total/100);page++){const next=await fetch(`/api/problems?page=${page}&limit=100`).then(r=>r.ok?r.json():null);if(next?.items)items.push(...next.items)}if(!active)return;const mapped=items.map((p:{slug:string;title:string;topic:string;difficulty:string;description:string;examples:{input:string;output:string}[];hints:string[];starterCode?:{javascript?:string}},index)=>({id:index+1,slug:p.slug,title:p.title,level:p.difficulty,topic:p.topic,description:p.description,starter:p.starterCode?.javascript||'// Implement the requested function',sample:p.examples?.[0]?`Input: ${p.examples[0].input}\nOutput: ${p.examples[0].output}`:'No example available.',hints:p.hints||[]}));setProblemList(mapped);setProblem(current=>mapped.find(p=>p.slug===current.slug)||mapped[0]);}catch{/* Keep the bundled starter list available when the API is offline. */}})();return()=>{active=false}},[]);useEffect(()=>{localStorage.setItem(`nexa-code-${problem.id}-${language}`,code);if(language==='javascript')localStorage.setItem('nexa-code-'+problem.id,code)},[problem,code,language]);
  useEffect(()=>{localStorage.setItem('nexa-language',language);localStorage.setItem('nexa-font-size',String(font));localStorage.setItem('nexa-theme',theme?'light':'dark')},[font,language,theme]);
  useEffect(()=>{fetch('/api/auth/me',{credentials:'include'}).then(r=>r.ok?r.json():null).then(data=>{if(data?.user)setUser(data.user)}).catch(()=>{})},[]);
@@ -44,21 +49,145 @@ export default function App(){
  useEffect(()=>{if(tab!=='Notes'||!user)return;fetch('/api/notes/'+problem.slug,{credentials:'include'}).then(r=>r.ok?r.json():null).then(data=>{if(typeof data?.note?.body==='string'){setNote(data.note.body);localStorage.setItem('note-'+problem.id,data.note.body)}}).catch(()=>{})},[tab,problem,user]);
  const list=problemList.filter(p=>(filter==='All'||p.level===filter)&&`${p.title} ${p.topic}`.toLowerCase().includes(search.toLowerCase()));
  function choose(p:Problem){setProblem(p);setReferenceSolution(null);setReferenceAvailable(false);setCode(localStorage.getItem(`nexa-code-${p.id}-${language}`)||(language==='javascript'?localStorage.getItem('nexa-code-'+p.id):null)||starterFor(language,p.starter));setNote(localStorage.getItem('note-'+p.id)||'');setTab('Description')}
- async function run(){if(language!=='javascript'){setOutput('Sending code to the configured Judge0 service…');try{const response=await fetch('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({language,code,stdin:''})});const data=await response.json();if(!response.ok)throw new Error(data.error||'Run request failed.');setOutput(`${data.verdict}\n${data.stdout||''}${data.stderr?`\n${data.stderr}`:''}${data.time?`\nTime: ${data.time}s`:''}${data.memory?` · Memory: ${data.memory} KB`:''}`)}catch(e){setOutput(e instanceof Error?e.message:'Could not reach the API.')}return}setOutput('Running…');try{const source=`const logs=[];console.log=(...a)=>logs.push(a.map(x=>typeof x==='object'?JSON.stringify(x):String(x)).join(' '));try{new Function(${JSON.stringify(code)})();postMessage({ok:true,text:logs.join('\\n')||'Finished with no output.'})}catch(e){postMessage({ok:false,text:e.name+': '+e.message})}`;const url=URL.createObjectURL(new Blob([source],{type:'text/javascript'})),worker=new Worker(url),timer=setTimeout(()=>{worker.terminate();URL.revokeObjectURL(url);setOutput('Time limit exceeded (2s).')},2000);worker.onmessage=e=>{clearTimeout(timer);worker.terminate();URL.revokeObjectURL(url);setOutput((e.data.ok?'? Finished\n':'Runtime error\n')+e.data.text)}}catch{setOutput('Could not start JavaScript worker in this browser.')}}
- async function runProblemTests(){setOutput('Running visible sample tests…');try{const response=await fetch(`/api/problems/${problem.slug}/run`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({language,code,stdin:''})});const data=await response.json();if(!response.ok)throw new Error(data.error||'Sample run failed.');if(!data.total){setOutput('No sample test cases are configured for this problem yet.');return}setOutput(`Sample tests: ${data.passed}/${data.total} passed\n`+data.results.map((r:{passed:boolean;input:string;expected:string;actual:string})=>`${r.passed?'PASS':'FAIL'} · ${r.input} · expected ${r.expected} · received ${r.actual}`).join('\n'))}catch(e){setOutput(e instanceof Error?e.message:'Could not run sample tests.')}} async function submit(){if(!user){setAuthOpen(true);return}setOutput('Checking hidden tests…');const slug=problem.slug;try{const response=await fetch(`/api/problems/${slug}/submit`,{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({language,code,stdin:''})});const data=await response.json();if(!response.ok)throw new Error(data.error||'Submission failed.');setOutput(`${data.submission.verdict} · ${data.tests} hidden tests`);setReferenceAvailable(data.submission.verdict==='Accepted');setReferenceSolution(null);if(data.submission.verdict==='Accepted'&&!solved.includes(problem.id)){const next=[...solved,problem.id];setSolved(next);localStorage.setItem('nexa-solved',JSON.stringify(next))}}catch(e){setOutput(e instanceof Error?e.message:'Could not submit solution.')}}
+ async function run(){await runProblemTests()}
+ async function runProblemTests(source=code){setCodingPanelMode('normal');setConsoleTab('Test Result');setOutput('Running visible sample tests…');try{const response=await fetch(`/api/problems/${problem.slug}/run`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({language,code:source,stdin:''})});const data=await response.json();if(!response.ok)throw new Error(data.error||'Sample run failed.');if(!data.total){setOutput('No sample test cases are configured for this problem yet.');return false}const results=data.results.map((result:{verdict:string;passed:boolean;input:string;expected:string;actual:string;stderr:string},index:number)=>[`Case ${index+1} · ${result.verdict}`,`Input: ${result.input}`,`Expected: ${result.expected}`,`Output: ${result.actual||'(no output)'}`,result.stderr?`Details: ${result.stderr}`:''].filter(Boolean).join('\n'));setOutput(`Sample tests: ${data.passed}/${data.total} passed\n\n${results.join('\n\n')}`);return data.passed===data.total}catch(e){setOutput(e instanceof Error?e.message:'Could not run sample tests.');return false}}
+ async function submit(source=code){if(!user){setAuthOpen(true);return false}setOutput('Checking hidden tests…');const slug=problem.slug;try{const response=await fetch(`/api/problems/${slug}/submit`,{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({language,code:source,stdin:''})});const data=await response.json();if(!response.ok)throw new Error(data.error||'Submission failed.');setOutput(`${data.submission.verdict} · ${data.tests} hidden tests`);setReferenceAvailable(data.submission.verdict==='Accepted');setReferenceSolution(null);if(data.submission.verdict==='Accepted'&&!solved.includes(problem.id)){const next=[...solved,problem.id];setSolved(next);localStorage.setItem('nexa-solved',JSON.stringify(next))}return data.submission.verdict==='Accepted'}catch(e){setOutput(e instanceof Error?e.message:'Could not submit solution.');return false}}
+ async function solveWithAi(){if(aiSolveBusy)return;if(!user){setAuthOpen(true);setOutput('Sign in to generate and submit an AI solution.');return}const slug=problem.slug;setAiSolveBusy(true);setOutput('Asking Gemini to solve this problem…');setReferenceAvailable(false);setReferenceSolution(null);try{const response=await fetch('/api/ai/solve',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({problemSlug:slug,language,code})});const data=await response.json() as {solution?:string;error?:string};if(!response.ok||!data.solution)throw new Error(data.error||'Gemini could not generate a solution.');const candidate=data.solution;setCode(candidate);setOutput('Gemini generated a solution. Checking visible tests before submission…');const passesVisible=await runProblemTests(candidate);if(!passesVisible){setOutput(current=>`AI solution was added to the editor but not submitted: visible tests did not all pass or the runner is unavailable.\n${current}`);return}await submit(candidate)}catch(error){setOutput(error instanceof Error?error.message:'Could not generate an AI solution.')}finally{setAiSolveBusy(false)}}
  useEffect(()=>{const key=(e:KeyboardEvent)=>{if((e.ctrlKey||e.metaKey)&&e.key==='Enter'){e.preventDefault();run()}if(e.key==='/'&&!['INPUT','TEXTAREA'].includes((document.activeElement as HTMLElement)?.tagName)){e.preventDefault();document.getElementById('search')?.focus()}};window.addEventListener('keydown',key);return()=>window.removeEventListener('keydown',key)});
  const count=solved.length;
- return <div className={`app ${theme?'light':''}`}><header className="topbar"><div className="brand"><span className="brand-mark">N</span>NEXA<span className="brand-muted">CODE</span></div><div className="workspace"><i/> Workspace <span>/</span> {view.toLowerCase()}</div><div className="top-actions"><button onClick={()=>setTheme(!theme)}>?</button><button onClick={()=>alert('Ctrl/? + Enter runs code · / focuses search')}>?</button><button className="account-button" title={user?.email||"Sign in"} onClick={async()=>{if(user){await fetch("/api/auth/logout",{method:"POST",credentials:"include"});setUser(null)}else setAuthOpen(true)}}>{user?.display_name?.slice(0,2).toUpperCase()||"AK"}</button></div></header><nav className="activity">{[['Practice','?'],['Editor','?'],['SQL','?'],['Progress','?']].map(([name,icon])=><button key={name} className={view===name?'active':''} onClick={()=>setView(name)}><b>{icon}</b><small>{name}</small></button>)}<button className="settings" onClick={()=>alert('Browser autosave is on')}><b>?</b><small>Settings</small></button></nav>
- <aside className="sidebar"><div className="side-title"><div><small>YOUR WORKSPACE</small><h2>{view}</h2></div><button onClick={()=>setView('Editor')}>+</button></div><label className="search"><span>?</span><input id="search" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search problems..."/><kbd>/</kbd></label><div className="filters">{['All','Easy','Medium','Hard'].map(f=><button key={f} className={filter===f?'active':''} onClick={()=>setFilter(f)}>{f}{f==='All'&&<small>{problemList.length}</small>}</button>)}</div><div className="problem-list">{list.map(p=><button key={p.id} className={`problem ${p.id===problem.id?'selected':''}`} onClick={()=>choose(p)}><span className="problem-name"><small>{String(p.id).padStart(2,'0')}</small>{p.title}{solved.includes(p.id)&&<i>?</i>}</span><span className="meta"><em className={p.level.toLowerCase()}>{p.level}</em>{p.topic}</span></button>)}</div><div className="streak"><b>?</b><span><strong>3 day streak</strong><small>Keep your momentum</small></span><i>?</i></div></aside>
- <main className="main">{view==='Practice'?<><div className="view-head"><div>Practice <span>/</span> <strong>{problem.topic}</strong></div><div className="head-actions"><button onClick={async e=>{const slug=problem.slug,has=bookmarks.includes(slug),next=has?bookmarks.filter(x=>x!==slug):[...bookmarks,slug];setBookmarks(next);localStorage.setItem('nexa-bookmarks',JSON.stringify(next));if(user)await fetch('/api/bookmarks/'+slug,{method:has?'DELETE':'POST',credentials:'include'});e.currentTarget.textContent=has?'? Save':'? Saved'}}>{bookmarks.includes(problem.slug)?'? Saved':'? Save'}</button><button onClick={()=>choose(problemList[(problem.id-2+problemList.length)%problemList.length])}>?</button><button onClick={()=>choose(problemList[problem.id%problemList.length])}>?</button></div></div><div className="split"><section className="description"><small className="eyebrow">PROBLEM {String(problem.id).padStart(3,'0')} <span>{problem.topic}</span></small><h1>{problem.title}</h1><div className={`level ${problem.level.toLowerCase()}`}>{problem.level} <span>·</span> ~20 min</div><p>{problem.description}</p><div className="tabs">{['Description','Hints','Tutor','Notes','Submissions'].map(t=><button key={t} className={tab===t?'active':''} onClick={()=>setTab(t)}>{t}</button>)}</div>{tab==='Description'?<><h3>Example</h3><pre>{problem.sample}</pre><h3>Constraints</h3><p className="constraints">• Input fits in memory<br/>• Return the result in the requested format<br/>• Consider edge cases and time complexity</p></>:tab==='Hints'?<><h3>Progressive hints</h3>{problem.hints.slice(0,Math.max(1,hints[problem.id]||0)).map((h,i)=><div className="hint" key={h}><b>Hint {i+1}.</b> {h}</div>)}<button className="outline" onClick={()=>setHints({...hints,[problem.id]:Math.min(3,(hints[problem.id]||0)+1)})}>{(hints[problem.id]||0)>=3?'All hints revealed':'Reveal next hint'}</button></>:tab==='Tutor'?<TutorPanel problemSlug={problem.slug} code={code} language={language} lastRunOutput={output} attempts={hints[problem.id]||0} signedIn={Boolean(user)}/>:tab==='Notes'?<><h3>Your notes</h3><textarea className="notes" placeholder="Your notes are saved locally" value={note} onChange={e=>{setNote(e.target.value);localStorage.setItem('note-'+problem.id,e.target.value)}} onBlur={async e=>{if(user)await fetch('/api/notes/'+problem.slug,{method:'PUT',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({body:e.currentTarget.value})})}}/></>:<><h3>Recent submissions</h3><p className="constraints">{solved.includes(problem.id)?'Accepted · local demo verdict':'No submissions yet.'}</p></>}</section>
- <section className="editor"><div className="editor-bar"><div><b>{language.toUpperCase()}</b> solution.{({javascript:'js',typescript:'ts',python:'py',java:'java',c:'c',cpp:'cpp',csharp:'cs',go:'go',rust:'rs',php:'php',ruby:'rb',kotlin:'kt'} as Record<string,string>)[language]||'txt'} { !['javascript','typescript'].includes(language)&&<small>Standalone program: JSON stdin → JSON stdout</small>}</div><div className="editor-controls"><button onClick={()=>setFont(Math.max(11,font-1))}>A-</button><button onClick={()=>setFont(Math.min(20,font+1))}>A+</button><button onClick={()=>setCode(starterFor(language,problem.starter))}>?</button><select value={language} onChange={e=>{const next=e.target.value;setLanguage(next);setCode(localStorage.getItem(`nexa-code-${problem.id}-${next}`)||(next==='javascript'?localStorage.getItem(`nexa-code-${problem.id}`):null)||starterFor(next,problem.starter))}}>{langList.map(([id,label])=><option value={id} key={id}>{label}</option>)}</select></div></div><div className="monaco"><Editor height="100%" language={language} theme="nexa-dark" value={code} onChange={v=>setCode(v||'')} options={{fontSize:font,fontFamily:'JetBrains Mono, monospace',minimap:{enabled:true},automaticLayout:true,scrollBeyondLastLine:false,tabSize:2,wordWrap:'off',padding:{top:16},bracketPairColorization:{enabled:true},guides:{bracketPairs:true},lineNumbers:'on'}} beforeMount={(monaco:Monaco)=>monaco.editor.defineTheme('nexa-dark',{base:'vs-dark',inherit:true,rules:[],colors:{'editor.background':'#0c1018','editorLineNumber.foreground':'#4b5668','editorCursor.foreground':'#63e6da','editor.selectionBackground':'#25454b'}})}/></div><div className="output"><div className="output-head"><span>OUTPUT</span><span>TESTS</span><button className="outline" onClick={runProblemTests}>Run samples</button>{referenceAvailable&&<button className="outline" onClick={async()=>{if(referenceSolution){setReferenceSolution(null);return}const response=await fetch(`/api/problems/${problem.slug}/solution`,{credentials:'include'});const data=await response.json();setReferenceSolution(data.solutions?.javascript||data.error||'Reference unavailable.')}}>{referenceSolution?'Hide reference':'Reference solution (JavaScript)'}</button>}<button className="outline" onClick={submit}>Submit</button><button className="run" onClick={run}>? &nbsp; Run</button></div><pre>{output}</pre>{referenceSolution&&<pre className="reference-solution">{referenceSolution}</pre>}<footer><span>{language.toUpperCase()}</span><span>Spaces: 2</span><span>UTF-8</span><span>Auto-save on</span></footer></div></section></div></>:view==='Progress'?<ProgressDashboard count={count} total={problemList.length} signedIn={Boolean(user)}/>:view==='SQL'?<SqlWorkbench/>:<div className="dashboard"><small className="eyebrow">CODE WORKSPACE</small><h1>Editor</h1><p>Quick JavaScript scratchpad</p><div className="card standalone"><Editor height="65vh" language="javascript" theme="vs-dark" value={localStorage.getItem('nexa-scratch')||'// Welcome to NexaCode\nconsole.log("Hello, developer!");'} onChange={v=>localStorage.setItem('nexa-scratch',v||'')} options={{fontSize:14,minimap:{enabled:false},automaticLayout:true}}/><button className="run" onClick={()=>setView('Practice')}>Open practice runner</button></div></div>}</main>{authOpen&&<AuthDialog onClose={()=>setAuthOpen(false)} onUser={setUser}/>}</div>
+ return (
+  <div className={`app ${theme?'light':''} ${questionsVisible?'':'questions-hidden'}`}>
+   <header className="topbar">
+    <div className="brand"><span className="brand-mark">N</span>NEXA<span className="brand-muted">CODE</span></div>
+    <div className="workspace"><i/> Workspace <span>/</span> {view.toLowerCase()}</div>
+    <div className="top-actions">
+     <button type="button" aria-label={theme?'Switch to dark theme':'Switch to light theme'} title={theme?'Switch to dark theme':'Switch to light theme'} onClick={()=>setTheme(!theme)}><Icon name="theme"/></button>
+     <button type="button" aria-label="Keyboard shortcuts" title="Keyboard shortcuts" onClick={()=>alert('Ctrl or Cmd + Enter runs code; / focuses search')}><Icon name="shortcuts"/></button>
+     <button type="button" className="account-button" title={user?.email||'Sign in'} aria-label={user?.email||'Sign in'} onClick={async()=>{if(user){await fetch('/api/auth/logout',{method:'POST',credentials:'include'});setUser(null)}else setAuthOpen(true)}}>{user?.display_name?.slice(0,2).toUpperCase()||'AK'}</button>
+    </div>
+   </header>
+   <nav className="activity" aria-label="Workspace navigation">
+    {activityItems.map(({name,icon})=><button type="button" key={name} className={view===name?'active':''} aria-label={name} onClick={()=>setView(name)}><b><Icon name={icon}/></b><small>{name}</small></button>)}
+    <button type="button" className="settings" aria-label="Settings" onClick={()=>alert('Browser autosave is on')}><b><Icon name="settings"/></b><small>Settings</small></button>
+   </nav>
+   <aside className="sidebar">
+    <div className="side-title">
+     <div><small>YOUR WORKSPACE</small><h2>{view}</h2></div>
+     <button type="button" className="question-slider" aria-label={questionsVisible?'Hide question list':'Show question list'} aria-pressed={questionsVisible} onClick={()=>setQuestionsVisible(visible=>!visible)}>
+      <span className="question-slider-track" aria-hidden="true"><i/></span><span className="question-slider-label">Questions</span>
+     </button>
+    </div>
+    <label className="search"><Icon name="search"/><input id="search" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search problems..."/><kbd>/</kbd></label>
+    <div className="filters">{['All','Easy','Medium','Hard'].map(f=><button type="button" key={f} className={filter===f?'active':''} onClick={()=>setFilter(f)}>{f}{f==='All'&&<small>{problemList.length}</small>}</button>)}</div>
+    <div className="problem-list">
+     {list.map(p=><button type="button" key={p.id} className={`problem ${p.id===problem.id?'selected':''}`} aria-current={p.id===problem.id?'page':undefined} onClick={()=>choose(p)}>
+      <span className="problem-name"><small>{String(p.id).padStart(2,'0')}</small>{p.title}{solved.includes(p.id)&&<Icon name="check"/>}</span>
+      <span className="meta"><em className={p.level.toLowerCase()}>{p.level}</em>{p.topic}</span>
+     </button>)}
+    </div>
+    <div className="streak"><b><Icon name="flame"/></b><span><strong>3 day streak</strong><small>Keep your momentum</small></span><i><Icon name="arrow-right"/></i></div>
+   </aside>
+   <main className="main">
+    {view==='Practice'?<>
+     <div className="view-head">
+      <div>Practice <span>/</span> <strong>{problem.topic}</strong></div>
+      <div className="head-actions">
+       <button type="button" aria-label={bookmarks.includes(problem.slug)?'Remove bookmark':'Save bookmark'} title={bookmarks.includes(problem.slug)?'Remove bookmark':'Save bookmark'} onClick={async()=>{const slug=problem.slug,has=bookmarks.includes(slug),next=has?bookmarks.filter(x=>x!==slug):[...bookmarks,slug];setBookmarks(next);localStorage.setItem('nexa-bookmarks',JSON.stringify(next));if(user)await fetch('/api/bookmarks/'+slug,{method:has?'DELETE':'POST',credentials:'include'})}}><Icon name="bookmark"/><span>{bookmarks.includes(problem.slug)?'Saved':'Save'}</span></button>
+       <button type="button" aria-label="Previous problem" title="Previous problem" onClick={()=>choose(problemList[(problem.id-2+problemList.length)%problemList.length])}><Icon name="arrow-left"/></button>
+       <button type="button" aria-label="Next problem" title="Next problem" onClick={()=>choose(problemList[problem.id%problemList.length])}><Icon name="arrow-right"/></button>
+      </div>
+     </div>
+     <div className={`split coding-panel-${codingPanelMode}`} style={{'--split-left':`${splitPercent}%`} as CSSProperties}>
+      <section className="description">
+       <small className="eyebrow">PROBLEM {String(problem.id).padStart(3,'0')} <span>{problem.topic}</span></small>
+       <h1>{problem.title}</h1>
+       <div className={`level ${problem.level.toLowerCase()}`}>{problem.level} <span>·</span> ~20 min</div>
+       <p>{problem.description}</p>
+       <div className="tabs">{['Description','Hints','Tutor','Notes','Submissions'].map(t=><button type="button" key={t} className={tab===t?'active':''} onClick={()=>setTab(t)}>{t}</button>)}</div>
+       {tab==='Description'?<>
+        <h3>Example</h3><pre>{problem.sample}</pre>
+        <h3>Constraints</h3><p className="constraints">- Input fits in memory<br/>- Return the result in the requested format<br/>- Consider edge cases and time complexity</p>
+       </>:tab==='Hints'?<>
+        <h3>Progressive hints</h3>
+        {problem.hints.slice(0,Math.max(1,hints[problem.id]||0)).map((h,i)=><div className="hint" key={h}><b>Hint {i+1}.</b> {h}</div>)}
+        <button type="button" className="outline" onClick={()=>setHints({...hints,[problem.id]:Math.min(3,(hints[problem.id]||0)+1)})}>{(hints[problem.id]||0)>=3?'All hints revealed':'Reveal next hint'}</button>
+       </>:tab==='Tutor'?<TutorPanel problemSlug={problem.slug} code={code} language={language} lastRunOutput={output} attempts={hints[problem.id]||0} signedIn={Boolean(user)}/>:tab==='Notes'?<>
+        <h3>Your notes</h3>
+        <textarea className="notes" placeholder="Your notes are saved locally" value={note} onChange={e=>{setNote(e.target.value);localStorage.setItem('note-'+problem.id,e.target.value)}} onBlur={async e=>{if(user)await fetch('/api/notes/'+problem.slug,{method:'PUT',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({body:e.currentTarget.value})})}}/>
+       </>:<>
+        <h3>Recent submissions</h3><p className="constraints">{solved.includes(problem.id)?'Accepted - local demo verdict':'No submissions yet.'}</p>
+       </>}
+      </section>
+      <div
+       className="split-handle"
+       role="separator"
+       aria-label="Resize problem and editor panels"
+       aria-orientation="vertical"
+       aria-valuemin={30}
+       aria-valuemax={65}
+       aria-valuenow={splitPercent}
+       aria-valuetext={`Problem panel ${splitPercent} percent wide`}
+       tabIndex={0}
+       onPointerDown={event=>event.currentTarget.setPointerCapture(event.pointerId)}
+       onPointerMove={event=>{if(event.buttons!==1)return;const bounds=event.currentTarget.parentElement?.getBoundingClientRect();if(bounds)setSplitPercent(Math.max(30,Math.min(65,Math.round((event.clientX-bounds.left)/bounds.width*100))))}}
+       onKeyDown={event=>{if(event.key==='ArrowLeft'||event.key==='ArrowRight'){event.preventDefault();setSplitPercent(value=>Math.max(30,Math.min(65,value+(event.key==='ArrowRight'?2:-2))))}}}
+      ><span/></div>
+      <section className="editor">
+       <div className="editor-bar">
+        <div><b>{language.toUpperCase()}</b> solution.{({javascript:'js',typescript:'ts',python:'py',java:'java',c:'c',cpp:'cpp',csharp:'cs',go:'go',rust:'rs',php:'php',ruby:'rb',kotlin:'kt'} as Record<string,string>)[language]||'txt'} {!['javascript','typescript'].includes(language)&&<small>Standalone program: JSON stdin to JSON stdout</small>}</div>
+        <div className="editor-controls">
+         <button type="button" aria-label="Decrease editor font size" title="Decrease font size" onClick={()=>setFont(Math.max(11,font-1))}>A-</button>
+         <button type="button" aria-label="Increase editor font size" title="Increase font size" onClick={()=>setFont(Math.min(20,font+1))}>A+</button>
+         <button type="button" aria-label="Reset starter code" title="Reset starter code" onClick={()=>setCode(starterFor(language,problem.starter))}><Icon name="reset"/></button>
+         <select aria-label="Programming language" value={language} onChange={e=>{const next=e.target.value;setLanguage(next);setCode(localStorage.getItem(`nexa-code-${problem.id}-${next}`)||(next==='javascript'?localStorage.getItem(`nexa-code-${problem.id}`):null)||starterFor(next,problem.starter))}}>{langList.map(([id,label])=><option value={id} key={id}>{label}</option>)}</select>
+         <div className="coding-panel-controls">
+          {codingPanelMode!=='minimized'&&<button type="button" className="outline" aria-label="Minimize coding panel" title="Minimize coding panel" onClick={()=>setCodingPanelMode('minimized')}><Icon name="minimize"/></button>}
+          {codingPanelMode==='normal'
+            ? <button type="button" className="outline" aria-label="Maximize coding panel" title="Maximize coding panel" onClick={()=>setCodingPanelMode('maximized')}><Icon name="maximize"/></button>
+            : <button type="button" className="outline" aria-label="Restore coding panel" title="Restore coding panel" onClick={()=>setCodingPanelMode('normal')}><Icon name="restore"/></button>}
+         </div>
+        </div>
+       </div>
+       <div className="monaco"><Editor height="100%" language={language} theme="nexa-dark" value={code} onChange={v=>setCode(v||'')} options={{fontSize:font,fontFamily:'JetBrains Mono, monospace',minimap:{enabled:true},automaticLayout:true,scrollBeyondLastLine:false,tabSize:2,wordWrap:'off',padding:{top:16},bracketPairColorization:{enabled:true},guides:{bracketPairs:true},lineNumbers:'on'}} beforeMount={(monaco:Monaco)=>monaco.editor.defineTheme('nexa-dark',{base:'vs-dark',inherit:true,rules:[],colors:{'editor.background':'#0c1018','editorLineNumber.foreground':'#4b5668','editorCursor.foreground':'#63e6da','editor.selectionBackground':'#25454b'}})}/></div>
+       <div
+        className="console-handle"
+        role="separator"
+        aria-label="Resize editor and test panel"
+        aria-orientation="horizontal"
+        aria-valuemin={140}
+        aria-valuemax={420}
+        aria-valuenow={consoleHeight}
+        aria-valuetext={`Test panel ${consoleHeight} pixels tall`}
+        tabIndex={0}
+        onPointerDown={event=>event.currentTarget.setPointerCapture(event.pointerId)}
+        onPointerMove={event=>{if(event.buttons!==1)return;const bounds=event.currentTarget.parentElement?.getBoundingClientRect();if(bounds)setConsoleHeight(Math.max(140,Math.min(420,Math.round(bounds.bottom-event.clientY))))}}
+        onKeyDown={event=>{if(event.key==='ArrowUp'||event.key==='ArrowDown'){event.preventDefault();setConsoleHeight(value=>Math.max(140,Math.min(420,value+(event.key==='ArrowUp'?10:-10))))}}}
+       ><span/></div>
+       <div className="output" style={{height:consoleHeight,flexBasis:consoleHeight}}>
+        <div className="output-head">
+         <div className="console-tabs" role="tablist" aria-label="Code test panel">
+          {(['Testcase','Test Result'] as const).map(name=><button type="button" id={`console-tab-${name==='Testcase'?'case':'result'}`} role="tab" aria-controls={`console-panel-${name==='Testcase'?'case':'result'}`} aria-selected={consoleTab===name} className={consoleTab===name?'active':''} key={name} onClick={()=>setConsoleTab(name)}>{name}</button>)}
+         </div>
+         <button type="button" className="outline" onClick={()=>runProblemTests()}>Run samples</button>
+         {referenceAvailable&&<button type="button" className="outline" onClick={async()=>{if(referenceSolution){setReferenceSolution(null);return}const response=await fetch(`/api/problems/${problem.slug}/solution`,{credentials:'include'});const data=await response.json();setReferenceSolution(data.solutions?.javascript||data.error||'Reference unavailable.')}}>{referenceSolution?'Hide reference':'Reference solution (JavaScript)'}</button>}
+         <button type="button" className="outline" onClick={()=>submit()} disabled={aiSolveBusy}>Submit</button>
+         <button type="button" className="run" onClick={solveWithAi} disabled={aiSolveBusy} title={`Generate ${language} with Gemini, run visible tests, then submit passing code`}>{aiSolveBusy?'Gemini solving...':'AI solve & submit'}</button>
+         <button type="button" className="run" onClick={run}><Icon name="play"/>Run</button>
+        </div>
+        {codingPanelMode!=='minimized'&&<>
+         {consoleTab==='Testcase'?<div className="testcase-content" id="console-panel-case" role="tabpanel" aria-labelledby="console-tab-case"><div><b>Sample case 1</b><span>Read-only example</span></div><pre>{problem.sample}</pre><p>Run samples to check your solution against the configured examples.</p></div>:<pre className="test-result" id="console-panel-result" role="tabpanel" aria-labelledby="console-tab-result">{output}</pre>}
+         {referenceSolution&&<pre className="reference-solution">{referenceSolution}</pre>}
+         <footer><span>{language.toUpperCase()}</span><span>Spaces: 2</span><span>UTF-8</span><span>Auto-save on</span></footer>
+        </>}
+       </div>
+      </section>
+     </div>
+    </>:view==='Progress'?<ProgressDashboard count={count} total={problemList.length} signedIn={Boolean(user)}/>:view==='SQL'?<SqlWorkbench signedIn={Boolean(user)} onRequireSignIn={()=>setAuthOpen(true)}/>:<div className="dashboard">
+     <small className="eyebrow">CODE WORKSPACE</small><h1>Editor</h1><p>Quick JavaScript scratchpad</p>
+     <div className="card standalone"><Editor height="65vh" language="javascript" theme="vs-dark" value={localStorage.getItem('nexa-scratch')||'// Welcome to NexaCode\nconsole.log("Hello, developer!");'} onChange={v=>localStorage.setItem('nexa-scratch',v||'')} options={{fontSize:14,minimap:{enabled:false},automaticLayout:true}}/><button type="button" className="run" onClick={()=>setView('Practice')}>Open practice runner</button></div>
+    </div>}
+   </main>
+   {authOpen&&<AuthDialog onClose={()=>setAuthOpen(false)} onUser={setUser}/>}
+  </div>
+ );
 }
-
-
-
-
-
-
-
-
-

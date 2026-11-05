@@ -1,3 +1,5 @@
+import { problemStarters } from './problem-starters.js';
+
 /** Validates a legal topological order without requiring one exact ordering. */
 export function isValidCourseOrder(order: unknown, n: number, prerequisites: number[][]): boolean {
   if (!Number.isInteger(n) || n < 0 || !Array.isArray(order) || !order.every(Number.isInteger)) return false;
@@ -42,8 +44,9 @@ const treeProblems = new Set(['widest-tree-level', 'balanced-tree-depth', 'root-
 export function wrapProblemCode(slug: string, source: string, input: string) {
   const value = JSON.parse(input) as Record<string, unknown>;
   const match = source.match(/function\s+([A-Za-z_$][\w$]*)\s*\(/);
-  if (!match) throw Object.assign(new Error('Submit a named function matching the starter signature.'), { status: 422 });
-  const functionName = match[1];
+  const expectedName = problemStarters[slug]?.match(/function\s+([A-Za-z_$][\w$]*)\s*\(/)?.[1];
+  const functionName = expectedName || match?.[1];
+  if (!functionName) throw Object.assign(new Error('Submit a named function matching the starter signature.'), { status: 422 });
   const serialized = (item: unknown) => JSON.stringify(item);
   let call: string;
 

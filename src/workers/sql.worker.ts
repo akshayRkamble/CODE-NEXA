@@ -18,9 +18,10 @@ async function openDatabase(dataset: Request['dataset']): Promise<Database> {
       (7,'Riley Shah',3,107000,'2021-06-20'),(8,'Jamie Singh',1,119000,'2024-01-08'),(9,'Avery Diaz',4,98500,'2020-05-14'),
       (10,'Quinn Park',1,141000,'2018-08-30'),(11,'Reese Ali',2,122000,'2023-04-02'),(12,'Drew Bell',3,110000,'2022-12-17');
     INSERT INTO orders VALUES (1,1,245.50,'shipped','2025-02-01'),(2,2,89.00,'pending','2025-02-03'),(3,1,410.25,'shipped','2025-02-05'),(4,4,72.00,'cancelled','2025-02-06');
+    CREATE TABLE books(id INTEGER PRIMARY KEY,title TEXT,author TEXT,genre TEXT,available INTEGER);
+    INSERT INTO books VALUES (1,'The Quiet Algorithm','N. Rao','Technology',1),(2,'River of Stars','M. Sen','Fiction',0),(3,'Small Worlds','A. Iyer','Science',1);
   `);
   if (dataset === 'Orders') database.run('CREATE VIEW IF NOT EXISTS order_summary AS SELECT * FROM orders');
-  if (dataset === 'Library') database.run(`CREATE TABLE IF NOT EXISTS books(id INTEGER PRIMARY KEY,title TEXT,author TEXT,genre TEXT,available INTEGER); INSERT OR IGNORE INTO books VALUES (1,'The Quiet Algorithm','N. Rao','Technology',1),(2,'River of Stars','M. Sen','Fiction',0),(3,'Small Worlds','A. Iyer','Science',1);`);
   return database;
 }
 self.onmessage = async (event: MessageEvent<Request>) => {
@@ -44,5 +45,4 @@ if (!/^\s*(SELECT|WITH)\b/i.test(query)) throw new Error('Only SELECT and WITH q
     self.postMessage({ id, ok: false, error: error instanceof Error ? error.message : 'SQL query failed.' });
   }
 };
-
 

@@ -1,19 +1,37 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 type Source = { id: number; title: string; source: string; topic: string | null; excerpt: string };
 type Props = { problemSlug: string; code: string; language: string; lastRunOutput: string; attempts: number; signedIn: boolean };
 
-export default function TutorPanelWithFeedback({ problemSlug, code, language, lastRunOutput, attempts, signedIn }: Props) {
+export default function TutorPanelWithFeedback({ problemSlug, code, language, lastRunOutput, signedIn }: Props) {
   const [question, setQuestion] = useState('');
   const [answer, setAnswer] = useState('');
   const [sources, setSources] = useState<Source[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [retryAvailable, setRetryAvailable] = useState(false);
   const [rating, setRating] = useState<1 | -1 | null>(null);
   const [feedbackBusy, setFeedbackBusy] = useState(false);
   const [mcpBusy, setMcpBusy] = useState(false);
   const [mcpOutput, setMcpOutput] = useState('');
   const [runApprovalOpen, setRunApprovalOpen] = useState(false);
+  const [serviceIssue, setServiceIssue] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    void fetch('/api/ai/status')
+      .then(async response => {
+        const status = await response.json() as { ready?: boolean; configured?: boolean; knowledgeBase?: string };
+        if (!active || status.ready) return;
+        if (status.knowledgeBase === 'empty') setServiceIssue('Tutor knowledge is not indexed yet. Run `npm run ingest` after restoring/configuring the embedding provider.');
+        else if (!status.configured) setServiceIssue('The tutor AI provider is not configured on the server.');
+        else setServiceIssue('The tutor service is unavailable. Check the API and database configuration.');
+      })
+      .catch(() => {
+        if (active) setServiceIssue('Could not check tutor readiness. Check that the API is running.');
+      });
+    return () => { active = false; };
+  }, []);
 
   async function ask(text = question) {
     if (!text.trim()) return;
@@ -26,10 +44,21 @@ export default function TutorPanelWithFeedback({ problemSlug, code, language, la
     setSources([]);
     setRating(null);
     setError('');
+    setRetryAvailable(false);
     setBusy(true);
     try {
-      const response = await fetch('/api/ai/ask', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question: text, problemSlug, code, language, lastRunOutput, attempts }) });
-      if (!response.ok) throw new Error((await response.json()).error || 'Tutor request failed.');
+      const response = await fetch('/api/ai/ask', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question: text, problemSlug, code, language, lastRunOutput }) });
+      if (!response.ok) {
+        let message = `Tutor request failed (HTTP ${response.status}).`;
+        try {
+          const data = await response.json() as { error?: string; requestId?: string };
+          if (data.error) message = data.requestId ? `${data.error} (Reference: ${data.requestId})` : data.error;
+        } catch {
+          // Keep the HTTP status when the server or proxy returns non-JSON.
+        }
+        setRetryAvailable(response.status === 429 || response.status === 503);
+        throw new Error(message);
+      }
       if (!response.body) throw new Error('Streaming is unavailable in this browser.');
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -47,11 +76,16 @@ export default function TutorPanelWithFeedback({ problemSlug, code, language, la
           const data = JSON.parse(line.slice(5).trim()) as { text?: string; error?: string } | Source[];
           if (eventName === 'sources') setSources(data as Source[]);
           else if (eventName === 'delta') setAnswer(old => old + ((data as { text?: string }).text || ''));
-          else if (eventName === 'error') setError((data as { error?: string }).error || 'Tutor failed.');
+          else if (eventName === 'error') {
+            const message = (data as { error?: string }).error || 'Tutor failed.';
+            setError(message);
+            setRetryAvailable(/rate.limit|temporarily|try again/i.test(message));
+          }
         }
       }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Could not reach the tutor.');
+      if (reason instanceof TypeError) setRetryAvailable(true);
     } finally {
       setBusy(false);
     }
@@ -105,6 +139,7 @@ export default function TutorPanelWithFeedback({ problemSlug, code, language, la
       <button disabled={busy} onClick={() => ask('Review the likely time and space complexity without rewriting my code.')}>Review complexity</button>
     </div>
     <div className="tutor-privacy">Your code is sent to the AI provider configured by the site operator.</div>
+    {serviceIssue && <div className="auth-error" role="status">{serviceIssue}</div>}
     <section className="mcp-tools" aria-labelledby="mcp-tools-title">
       <b id="mcp-tools-title">MCP tools</b>
       <p>Use NexaCode tools for problem and knowledge lookup. Running code requires your confirmation.</p>
@@ -120,8 +155,9 @@ export default function TutorPanelWithFeedback({ problemSlug, code, language, la
     {answer && !busy && <div className="tutor-actions" aria-label="Rate this tutor response"><span>Was this helpful?</span><button disabled={feedbackBusy || rating !== null} onClick={() => rate(1)} aria-pressed={rating === 1}>Helpful</button><button disabled={feedbackBusy || rating !== null} onClick={() => rate(-1)} aria-pressed={rating === -1}>Not helpful</button>{rating !== null && <small>Thanks for your feedback.</small>}</div>}
     {sources.length > 0 && <div className="tutor-sources"><b>Sources</b>{sources.map(source => <div className="source-chip" key={source.id}>[{source.id}] {source.title}<small>{source.topic || source.source}</small></div>)}</div>}
     {error && <div className="auth-error">{error}</div>}
-    <textarea className="tutor-question" value={question} onChange={event => setQuestion(event.target.value)} placeholder="Ask the tutor..." maxLength={2000} />
+    <textarea className="tutor-question" value={question} onChange={event => { setQuestion(event.target.value); setRetryAvailable(false); }} placeholder="Ask the tutor..." maxLength={2000} />
     <button className="run" disabled={busy || !question.trim()} onClick={() => ask()}>{busy ? 'Thinking...' : 'Ask tutor'}</button>
+    {error && retryAvailable && <button className="outline" disabled={busy} onClick={() => ask(question)}>Retry question</button>}
     {runApprovalOpen && <div className="auth-backdrop" role="presentation">
       <section className="auth-card" role="alertdialog" aria-modal="true" aria-labelledby="mcp-run-title" aria-describedby="mcp-run-description">
         <h2 id="mcp-run-title">Allow code execution?</h2>
