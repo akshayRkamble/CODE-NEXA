@@ -1,11 +1,13 @@
-import { useEffect, useState, type CSSProperties } from 'react';
-import Editor, { type Monaco } from '@monaco-editor/react';
+import { lazy, Suspense, useEffect, useState, type CSSProperties } from 'react';
 import Icon, { type IconName } from './Icon';
 import SqlWorkbench from './SqlWorkbench';
 import TutorPanel from './TutorPanelWithFeedback';
 import ProgressDashboard from './ProgressDashboard';
 import AuthDialog, { type SessionUser } from './AuthDialogFixed';
 import { balancedBracketsStarters } from './problemLanguageStarters';
+import { getPracticeLanguage, practiceLanguages, standaloneStarters, type PracticeLanguage } from './editorLanguages';
+const CodeEditor = lazy(() => import('./CodeEditor'));
+const StandaloneEditor = lazy(() => import('./StandaloneEditor'));
 type Problem={id:number;slug:string;title:string;level:string;topic:string;description:string;starter:string;sample:string;hints:string[]};
 const problems=[
 {id:1,title:'Pair Sum',level:'Easy',topic:'Arrays & Hashing',description:'Given a list of integers and a target value, return the indices of two distinct entries whose values add up to the target. Assume exactly one pair exists.',starter:'function pairSum(values, target) {\n  // Your solution\n}\n\nconsole.log(pairSum([4, 1, 8, 3], 7));',sample:'Input: [4, 1, 8, 3], target = 7\nOutput: [0, 3]',hints:['Try checking every pair first.','Store values already visited in a map.','Look for target - x before storing x.']},
@@ -22,25 +24,14 @@ const problems=[
 {id:12,title:'Search a Sorted Grid',level:'Hard',topic:'Binary Search',description:'Rows are sorted and each row begins above the previous row’s end. Return whether target is present.',starter:'function searchGrid(grid, target) {\n  // Your solution\n}',sample:'Input: [[1,4,7],[9,12,16]], target 12\nOutput: true',hints:['Treat the matrix as one sorted sequence.','Map flat index to row and column.','Binary search all positions.']}
 ];
 const slugById:Record<number,string>={1:'pair-sum',2:'balanced-brackets',3:'longest-unique-window',4:'merge-time-blocks',5:'widest-tree-level',6:'ways-up-the-steps',7:'rotate-grid',8:'graph-reachability',9:'minimum-coin-count',10:'find-a-cycle',11:'product-except-self',12:'search-sorted-grid'};
-const langList=[['javascript','JavaScript'],['typescript','TypeScript'],['python','Python'],['java','Java'],['c','C'],['cpp','C++'],['csharp','C#'],['go','Go'],['rust','Rust'],['php','PHP'],['ruby','Ruby'],['kotlin','Kotlin']];
 const activityItems: {name:string;icon:IconName}[]=[{name:'Practice',icon:'practice'},{name:'Editor',icon:'editor'},{name:'SQL',icon:'sql'},{name:'Progress',icon:'progress'}];
-const standaloneStarters:Record<string,string>={
- python:'import json\nimport sys\n\ninput_data = json.loads(sys.stdin.read())\n\ndef solve(data):\n    # Return the result as a JSON-compatible value.\n    return None\n\nprint(json.dumps(solve(input_data), separators=(\",\", \":\")))',
- java:'import java.nio.charset.StandardCharsets;\n\npublic class Main {\n    public static void main(String[] args) throws Exception {\n        String input = new String(System.in.readAllBytes(), StandardCharsets.UTF_8);\n        // Parse the JSON input and print the result as JSON.\n        System.out.println(\"null\");\n    }\n}',
- c:'#include <stdio.h>\n#include <stdlib.h>\n\nint main(void) {\n    /* Read JSON from stdin and print the result as JSON. */\n    puts(\"null\");\n    return 0;\n}',
- cpp:'#include <iostream>\n#include <iterator>\n#include <string>\n\nint main() {\n    std::string input((std::istreambuf_iterator<char>(std::cin)), std::istreambuf_iterator<char>());\n    // Parse the JSON input and print the result as JSON.\n    std::cout << \"null\\n\";\n}',
- csharp:'using System;\n\nvar input = Console.In.ReadToEnd();\n// Parse the JSON input and print the result as JSON.\nConsole.WriteLine(\"null\");',
- go:'package main\n\nimport (\n    \"encoding/json\"\n    \"os\"\n)\n\nfunc main() {\n    var input any\n    _ = json.NewDecoder(os.Stdin).Decode(&input)\n    // Compute the result and encode it as JSON.\n    _ = json.NewEncoder(os.Stdout).Encode(nil)\n}',
- rust:'use std::io::{self, Read};\n\nfn main() {\n    let mut input = String::new();\n    io::stdin().read_to_string(&mut input).expect(\"read input\");\n    // Parse the JSON input and print the result as JSON.\n    println!(\"null\");\n}',
- php:'<?php\n$input = json_decode(stream_get_contents(STDIN), true);\nfunction solve($data) {\n    // Return the result as a JSON-compatible value.\n    return null;\n}\necho json_encode(solve($input), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), PHP_EOL;',
- ruby:'require \"json\"\ninput_data = JSON.parse(STDIN.read)\ndef solve(data)\n  # Return the result as a JSON-compatible value.\n  nil\nend\nputs JSON.generate(solve(input_data))',
- kotlin:'import java.io.BufferedReader\n\nfun main() {\n    val input = generateSequence(::readLine).joinToString(\"\\\\n\")\n    // Parse the JSON input and print the result as JSON.\n    println(\"null\")\n}'
-};
-const starterFor=(language:string,javascriptStarter:string)=>/function isBalanced\s*\(/.test(javascriptStarter)?balancedBracketsStarters[language]||javascriptStarter:['javascript','typescript'].includes(language)?javascriptStarter:standaloneStarters[language]||'// Read the JSON test input from stdin and print the JSON result to stdout.';
+const starterFor=(language:PracticeLanguage,javascriptStarter:string)=>/function isBalanced\s*\(/.test(javascriptStarter)?balancedBracketsStarters[language]||javascriptStarter:language==='javascript'||language==='typescript'?javascriptStarter:standaloneStarters[language]||'// Read the JSON test input from stdin and print the JSON result to stdout.';
 export default function App(){
+ const [initialLanguage] = useState<PracticeLanguage>(()=>getPracticeLanguage(localStorage.getItem('nexa-language')||'javascript').id);
  const [questionsVisible,setQuestionsVisible]=useState(true);
  const [codingPanelMode,setCodingPanelMode]=useState<'normal'|'maximized'|'minimized'>('normal');
- const [problemList,setProblemList]=useState<Problem[]>(()=>problems.map(p=>({...p,slug:slugById[p.id]}))),[view,setView]=useState('Practice'),[problem,setProblem]=useState<Problem>(()=>({...problems[0],slug:slugById[1]})),[filter,setFilter]=useState('All'),[search,setSearch]=useState(''),[language,setLanguage]=useState(()=>localStorage.getItem('nexa-language')||'javascript'),[tab,setTab]=useState('Description'),[consoleTab,setConsoleTab]=useState<'Testcase'|'Test Result'>('Testcase'),[splitPercent,setSplitPercent]=useState(47),[consoleHeight,setConsoleHeight]=useState(225),[code,setCode]=useState(()=>{const initialLanguage=localStorage.getItem('nexa-language')||'javascript',saved=localStorage.getItem(`nexa-code-1-${initialLanguage}`);return saved||(['javascript','typescript'].includes(initialLanguage)?localStorage.getItem('nexa-code-1')||problems[0].starter:starterFor(initialLanguage,problems[0].starter))}),[output,setOutput]=useState('Ready when you are. Run your code to see output.'),[referenceSolution,setReferenceSolution]=useState<string|null>(null),[referenceAvailable,setReferenceAvailable]=useState(false),[solved,setSolved]=useState<number[]>(()=>JSON.parse(localStorage.getItem('nexa-solved')||'[]')),[font,setFont]=useState(()=>Number(localStorage.getItem('nexa-font-size'))||13),[hints,setHints]=useState<Record<number,number>>({}),[theme,setTheme]=useState(()=>localStorage.getItem('nexa-theme')==='light'),[bookmarks,setBookmarks]=useState<string[]>(()=>JSON.parse(localStorage.getItem('nexa-bookmarks')||'[]')),[note,setNote]=useState(()=>localStorage.getItem('note-1')||''),[authOpen,setAuthOpen]=useState(false),[aiSolveBusy,setAiSolveBusy]=useState(false),[user,setUser]=useState<SessionUser|null>(null);
+ const [problemList,setProblemList]=useState<Problem[]>(()=>problems.map(p=>({...p,slug:slugById[p.id]}))),[view,setView]=useState('Practice'),[problem,setProblem]=useState<Problem>(()=>({...problems[0],slug:slugById[1]})),[filter,setFilter]=useState('All'),[search,setSearch]=useState(''),[language,setLanguage]=useState<PracticeLanguage>(initialLanguage),[tab,setTab]=useState('Description'),[consoleTab,setConsoleTab]=useState<'Testcase'|'Test Result'>('Testcase'),[splitPercent,setSplitPercent]=useState(47),[consoleHeight,setConsoleHeight]=useState(225),[code,setCode]=useState(()=>{const saved=localStorage.getItem(`nexa-code-1-${initialLanguage}`);return saved||(['javascript','typescript'].includes(initialLanguage)?localStorage.getItem('nexa-code-1')||problems[0].starter:starterFor(initialLanguage,problems[0].starter))}),[output,setOutput]=useState('Ready when you are. Run your code to see output.'),[referenceSolution,setReferenceSolution]=useState<string|null>(null),[referenceAvailable,setReferenceAvailable]=useState(false),[solved,setSolved]=useState<number[]>(()=>JSON.parse(localStorage.getItem('nexa-solved')||'[]')),[font,setFont]=useState(()=>Number(localStorage.getItem('nexa-font-size'))||13),[hints,setHints]=useState<Record<number,number>>({}),[theme,setTheme]=useState(()=>localStorage.getItem('nexa-theme')==='light'),[bookmarks,setBookmarks]=useState<string[]>(()=>JSON.parse(localStorage.getItem('nexa-bookmarks')||'[]')),[note,setNote]=useState(()=>localStorage.getItem('note-1')||''),[authOpen,setAuthOpen]=useState(false),[aiSolveBusy,setAiSolveBusy]=useState(false),[user,setUser]=useState<SessionUser|null>(null);
+ const [wordWrap,setWordWrap]=useState(false),[minimap,setMinimap]=useState(true),[cursorPosition,setCursorPosition]=useState({line:1,column:1,lineCount:1});
  useEffect(()=>{let active=true;(async()=>{try{const first=await fetch('/api/problems?page=1&limit=100').then(r=>r.ok?r.json():null);if(!first?.items?.length)return;let items=[...first.items];for(let page=2;page<=Math.ceil(first.total/100);page++){const next=await fetch(`/api/problems?page=${page}&limit=100`).then(r=>r.ok?r.json():null);if(next?.items)items.push(...next.items)}if(!active)return;const mapped=items.map((p:{slug:string;title:string;topic:string;difficulty:string;description:string;examples:{input:string;output:string}[];hints:string[];starterCode?:{javascript?:string}},index)=>({id:index+1,slug:p.slug,title:p.title,level:p.difficulty,topic:p.topic,description:p.description,starter:p.starterCode?.javascript||'// Implement the requested function',sample:p.examples?.[0]?`Input: ${p.examples[0].input}\nOutput: ${p.examples[0].output}`:'No example available.',hints:p.hints||[]}));setProblemList(mapped);setProblem(current=>mapped.find(p=>p.slug===current.slug)||mapped[0]);}catch{/* Keep the bundled starter list available when the API is offline. */}})();return()=>{active=false}},[]);useEffect(()=>{localStorage.setItem(`nexa-code-${problem.id}-${language}`,code);if(language==='javascript')localStorage.setItem('nexa-code-'+problem.id,code)},[problem,code,language]);
  useEffect(()=>{localStorage.setItem('nexa-language',language);localStorage.setItem('nexa-font-size',String(font));localStorage.setItem('nexa-theme',theme?'light':'dark')},[font,language,theme]);
  useEffect(()=>{fetch('/api/auth/me',{credentials:'include'}).then(r=>r.ok?r.json():null).then(data=>{if(data?.user)setUser(data.user)}).catch(()=>{})},[]);
@@ -73,8 +64,8 @@ export default function App(){
    <aside className="sidebar">
     <div className="side-title">
      <div><small>YOUR WORKSPACE</small><h2>{view}</h2></div>
-     <button type="button" className="question-slider" aria-label={questionsVisible?'Hide question list':'Show question list'} aria-pressed={questionsVisible} onClick={()=>setQuestionsVisible(visible=>!visible)}>
-      <span className="question-slider-track" aria-hidden="true"><i/></span><span className="question-slider-label">Questions</span>
+     <button type="button" className="question-slider" aria-label={questionsVisible?'Hide question list':'Show question list'} title={questionsVisible?'Hide question list':'Show question list'} aria-expanded={questionsVisible} onClick={()=>setQuestionsVisible(visible=>!visible)}>
+      <span className="question-slider-label">Questions</span><Icon name={questionsVisible?'arrow-left':'arrow-right'}/>
      </button>
     </div>
     <label className="search"><Icon name="search"/><input id="search" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search problems..."/><kbd>/</kbd></label>
@@ -134,12 +125,18 @@ export default function App(){
       ><span/></div>
       <section className="editor">
        <div className="editor-bar">
-        <div><b>{language.toUpperCase()}</b> solution.{({javascript:'js',typescript:'ts',python:'py',java:'java',c:'c',cpp:'cpp',csharp:'cs',go:'go',rust:'rs',php:'php',ruby:'rb',kotlin:'kt'} as Record<string,string>)[language]||'txt'} {!['javascript','typescript'].includes(language)&&<small>Standalone program: JSON stdin to JSON stdout</small>}</div>
+        <div className="editor-file-tab" aria-label={`Current file ${getPracticeLanguage(language).fileName}`}>
+         <i className={`language-dot language-${language}`} aria-hidden="true"/>
+         <span>{getPracticeLanguage(language).fileName}</span>
+         <small>{problem.title}</small>
+        </div>
         <div className="editor-controls">
          <button type="button" aria-label="Decrease editor font size" title="Decrease font size" onClick={()=>setFont(Math.max(11,font-1))}>A-</button>
          <button type="button" aria-label="Increase editor font size" title="Increase font size" onClick={()=>setFont(Math.min(20,font+1))}>A+</button>
+         <button type="button" aria-label={wordWrap?'Disable word wrap':'Enable word wrap'} aria-pressed={wordWrap} title={wordWrap?'Disable word wrap':'Enable word wrap'} onClick={()=>setWordWrap(value=>!value)}>Wrap</button>
+         <button type="button" aria-label={minimap?'Hide minimap':'Show minimap'} aria-pressed={minimap} title={minimap?'Hide minimap':'Show minimap'} onClick={()=>setMinimap(value=>!value)}>Map</button>
          <button type="button" aria-label="Reset starter code" title="Reset starter code" onClick={()=>setCode(starterFor(language,problem.starter))}><Icon name="reset"/></button>
-         <select aria-label="Programming language" value={language} onChange={e=>{const next=e.target.value;setLanguage(next);setCode(localStorage.getItem(`nexa-code-${problem.id}-${next}`)||(next==='javascript'?localStorage.getItem(`nexa-code-${problem.id}`):null)||starterFor(next,problem.starter))}}>{langList.map(([id,label])=><option value={id} key={id}>{label}</option>)}</select>
+         <select aria-label="Programming language" value={language} onChange={e=>{const next=practiceLanguages.find(item=>item.id===e.target.value)?.id;if(!next)return;setLanguage(next);setCode(localStorage.getItem(`nexa-code-${problem.id}-${next}`)||(next==='javascript'?localStorage.getItem(`nexa-code-${problem.id}`):null)||starterFor(next,problem.starter))}}>{practiceLanguages.map(({id,label})=><option value={id} key={id}>{label}</option>)}</select>
          <div className="coding-panel-controls">
           {codingPanelMode!=='minimized'&&<button type="button" className="outline" aria-label="Minimize coding panel" title="Minimize coding panel" onClick={()=>setCodingPanelMode('minimized')}><Icon name="minimize"/></button>}
           {codingPanelMode==='normal'
@@ -148,7 +145,7 @@ export default function App(){
          </div>
         </div>
        </div>
-       <div className="monaco"><Editor height="100%" language={language} theme="nexa-dark" value={code} onChange={v=>setCode(v||'')} options={{fontSize:font,fontFamily:'JetBrains Mono, monospace',minimap:{enabled:true},automaticLayout:true,scrollBeyondLastLine:false,tabSize:2,wordWrap:'off',padding:{top:16},bracketPairColorization:{enabled:true},guides:{bracketPairs:true},lineNumbers:'on'}} beforeMount={(monaco:Monaco)=>monaco.editor.defineTheme('nexa-dark',{base:'vs-dark',inherit:true,rules:[],colors:{'editor.background':'#0c1018','editorLineNumber.foreground':'#4b5668','editorCursor.foreground':'#63e6da','editor.selectionBackground':'#25454b'}})}/></div>
+       <div className="monaco"><Suspense fallback={<div className="editor-loading">Loading editor…</div>}><CodeEditor height="100%" language={language} theme={theme?'nexa-light':'nexa-dark'} value={code} onChange={setCode} fontSize={font} minimap={minimap} wordWrap={wordWrap} onCursorChange={setCursorPosition}/></Suspense></div>
        <div
         className="console-handle"
         role="separator"
@@ -177,15 +174,21 @@ export default function App(){
         {codingPanelMode!=='minimized'&&<>
          {consoleTab==='Testcase'?<div className="testcase-content" id="console-panel-case" role="tabpanel" aria-labelledby="console-tab-case"><div><b>Sample case 1</b><span>Read-only example</span></div><pre>{problem.sample}</pre><p>Run samples to check your solution against the configured examples.</p></div>:<pre className="test-result" id="console-panel-result" role="tabpanel" aria-labelledby="console-tab-result">{output}</pre>}
          {referenceSolution&&<pre className="reference-solution">{referenceSolution}</pre>}
-         <footer><span>{language.toUpperCase()}</span><span>Spaces: 2</span><span>UTF-8</span><span>Auto-save on</span></footer>
+         <footer><span>{language.toUpperCase()}</span><span>JSON stdin / stdout</span><span>Auto-save on</span></footer>
         </>}
        </div>
+       <footer className="editor-statusbar" aria-label="Editor status">
+        <span className="status-language"><i className={`language-dot language-${language}`} aria-hidden="true"/>{getPracticeLanguage(language).label}</span>
+        <span>Ln {cursorPosition.line}, Col {cursorPosition.column}</span>
+        <span>{cursorPosition.lineCount} lines</span>
+        <span>Spaces: 2</span>
+        <span>UTF-8</span>
+        <span>LF</span>
+        <span className="status-saved">Saved locally</span>
+       </footer>
       </section>
      </div>
-    </>:view==='Progress'?<ProgressDashboard count={count} total={problemList.length} signedIn={Boolean(user)}/>:view==='SQL'?<SqlWorkbench signedIn={Boolean(user)} onRequireSignIn={()=>setAuthOpen(true)}/>:<div className="dashboard">
-     <small className="eyebrow">CODE WORKSPACE</small><h1>Editor</h1><p>Quick JavaScript scratchpad</p>
-     <div className="card standalone"><Editor height="65vh" language="javascript" theme="vs-dark" value={localStorage.getItem('nexa-scratch')||'// Welcome to NexaCode\nconsole.log("Hello, developer!");'} onChange={v=>localStorage.setItem('nexa-scratch',v||'')} options={{fontSize:14,minimap:{enabled:false},automaticLayout:true}}/><button type="button" className="run" onClick={()=>setView('Practice')}>Open practice runner</button></div>
-    </div>}
+    </>:view==='Progress'?<ProgressDashboard count={count} total={problemList.length} signedIn={Boolean(user)}/>:view==='SQL'?<SqlWorkbench signedIn={Boolean(user)} onRequireSignIn={()=>setAuthOpen(true)}/>:<Suspense fallback={<div className="editor-loading">Loading workspace…</div>}><StandaloneEditor theme={theme?'nexa-light':'nexa-dark'} onOpenPractice={()=>setView('Practice')}/></Suspense>}
    </main>
    {authOpen&&<AuthDialog onClose={()=>setAuthOpen(false)} onUser={setUser}/>}
   </div>

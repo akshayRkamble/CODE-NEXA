@@ -18,11 +18,16 @@ Postgres starts from `db/init.sql` with the user, problem, submission, notes, bo
 
 ### Sandboxed multi-language execution
 
-The JavaScript editor can run code in a short-lived Web Worker. Other selected languages use the API, which only forwards code to Judge0; it never executes user code in Express.
+All editor languages run through the API and an isolated runner; user code is never evaluated in Express. For local development with a Piston service listening on port 2000, set `CODE_RUNNER=piston` and `PISTON_URL=http://localhost:2000`. Piston is restricted to non-production environments. Production always uses Judge0.
+
+The editor terminal separates compiler diagnostics from program stdout/stderr and shows compile time, runtime, memory, and exit details when the configured runner reports them. Judge0 does not provide a separate compile-time measurement, so the terminal marks that value as not reported rather than estimating it.
+
+To run Judge0 locally or in production:
 
 1. Copy `judge0.conf.example` to `judge0.conf` and replace all placeholder passwords/tokens.
 2. Put the same Judge0 authentication token in `.env` as `JUDGE0_AUTH_TOKEN`, and set `JUDGE0_URL=http://localhost:2358`.
-3. Start the Judge0 profile: `docker compose --profile execution up -d judge0-db judge0-redis judge0-server judge0-worker`.
+3. Set `CODE_RUNNER=judge0`.
+4. Start the Judge0 profile: `docker compose --profile execution up -d judge0-db judge0-redis judge0-server judge0-worker`.
 
 Judge0 requires privileged containers for its isolation runtime. Keep its API bound to localhost behind the NexaCode API. The included configuration disables user code network access and compiler/command-line overrides. Judge0's official Compose deployment uses separate server, worker, PostgreSQL, and Redis services; this repository follows that layout ([official Judge0 Compose file](https://github.com/judge0/judge0/blob/master/docker-compose.yml)).
 
@@ -42,9 +47,9 @@ Ingestion reads Markdown in `data/knowledge`, splits it with overlap, skips unch
 
 ## Implemented now
 
-- Monaco editor, language modes for 12 languages, local drafts, font controls, responsive workspace and light/dark styling.
+- VS Code-inspired Monaco workspace with local multi-file projects, file creation and switching, language selection for all 12 practice languages, editable stdin, sandboxed Run, diagnostic Debug runs, and responsive light/dark themes. Interactive pause/step debugging is not supported by the configured remote runner.
 - 150 original practice problems, topic and difficulty search, progressive hints, local notes/bookmarks, and progress view.
-- JavaScript execution in a two-second Worker; other languages forward to Judge0 when configured.
+- Code execution for all 12 languages goes through the configured isolated code runner; the Express API never evaluates user code itself.
 - SQLite WASM in a Web Worker with sample employee/order/library tables, query history, result grid, read-only filtering, and CSV/JSON export.
 - Express API with Zod validation, security headers, CORS allowlist, request/rate limits, bcrypt password hashing, httpOnly JWT cookies, email/password and GitHub OAuth sign-in, and persistent notes/bookmarks/submissions/progress endpoints.
 - Judge0 adapter with CPU/memory bounds and verdict mapping.
@@ -64,3 +69,10 @@ No user code is run in the Express process. The in-browser JavaScript Worker is 
 ### GitHub sign-in
 
 Create a GitHub OAuth App with callback URL `http://localhost:4000/api/auth/github/callback`, then set `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, and the exact `GITHUB_CALLBACK_URL` in `.env`. Production must use its HTTPS callback URL. GitHub identities are stored by GitHub account ID; an email match alone never links accounts.
+
+#### Execute A Project ######
+npm install
+docker compose up -d postgres
+npm run dev
+
+####

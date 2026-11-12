@@ -27,7 +27,13 @@ const pool=process.env.DATABASE_URL?new Pool({connectionString:process.env.DATAB
 const secret=process.env.JWT_SECRET||'local-development-only-change-before-deploying';
 app.disable('x-powered-by');app.use(helmet());app.use(cors({origin,credentials:true}));app.use(express.json({limit:'128kb'}));
 app.use('/api',rateLimit({windowMs:60_000,limit:120,standardHeaders:true,legacyHeaders:false}));
-const runLimit=rateLimit({windowMs:60_000,limit:12,standardHeaders:true,legacyHeaders:false});
+const runLimit=rateLimit({
+ windowMs:60_000,
+ limit:process.env.NODE_ENV==='production'?12:60,
+ standardHeaders:true,
+ legacyHeaders:false,
+ handler:(_req,res)=>res.status(429).json({error:'Execution limit reached (12 runs per minute). Please wait and try again.'})
+});
 const LANGUAGES:Record<string,number>={javascript:63,typescript:74,python:71,java:62,c:50,cpp:54,csharp:51,go:60,rust:73,php:68,ruby:72,kotlin:78};
 const tokenCookie={httpOnly:true,sameSite:'lax' as const,secure:process.env.NODE_ENV==='production',path:'/',maxAge:7*24*60*60*1000};
 function db(){if(!pool)throw Object.assign(new Error('Database is not configured. Copy .env.example to .env and start PostgreSQL.'),{status:503});return pool}
@@ -159,12 +165,30 @@ app.delete('/api/bookmarks/:slug',auth,async(req,res,next)=>{try{await db().quer
 app.get('/api/notes/:slug',auth,async(req,res,next)=>{try{const r=await db().query('SELECT body,updated_at FROM notes WHERE user_id=$1 AND problem_slug=$2',[userId(req),req.params.slug]);res.json({note:r.rows[0]||{body:''}})}catch(e){next(e)}});
 app.put('/api/notes/:slug',auth,async(req,res,next)=>{try{const {body}=z.object({body:z.string().max(20000)}).parse(req.body);const r=await db().query('INSERT INTO notes(user_id,problem_slug,body) VALUES($1,$2,$3) ON CONFLICT(user_id,problem_slug) DO UPDATE SET body=EXCLUDED.body,updated_at=now() RETURNING body,updated_at',[userId(req),req.params.slug,body]);res.json({note:r.rows[0]})}catch(e){next(e)}});
 const runSchema=z.object({language:z.enum(Object.keys(LANGUAGES) as [string,...string[]]),code:z.string().min(1).max(64*1024),stdin:z.string().max(10*1024).default('')});
-async function judgeWithJudge0(code:string,language:string,stdin:string){const base=process.env.JUDGE0_URL;if(!base)throw Object.assign(new Error('Code execution is not configured. Start Judge0 and set JUDGE0_URL.'),{status:503});const headers:Record<string,string>={'Content-Type':'application/json'};if(process.env.JUDGE0_AUTH_TOKEN)headers['X-Auth-Token']=process.env.JUDGE0_AUTH_TOKEN;const response=await fetch(`${base.replace(/\/$/,'')}/submissions?base64_encoded=false&wait=true`,{method:'POST',headers,body:JSON.stringify({source_code:code,language_id:LANGUAGES[language],stdin,cpu_time_limit:5,memory_limit:128000})});if(!response.ok)throw Object.assign(new Error(`Judge0 returned HTTP ${response.status}.`),{status:502});return await response.json() as {stdout?:string|null;stderr?:string|null;compile_output?:string|null;time?:string|null;memory?:number|null;status?:{id:number;description:string}}}
+async function judgeWithJudge0(code:string,language:string,stdin:string){
+ const base=process.env.JUDGE0_URL;
+ if(!base)throw Object.assign(new Error('Code execution is not configured. Start Judge0 or configure the local Piston runner.'),{status:503});
+ const headers:Record<string,string>={'Content-Type':'application/json'};
+ if(process.env.JUDGE0_AUTH_TOKEN)headers['X-Auth-Token']=process.env.JUDGE0_AUTH_TOKEN;
+ let response:globalThis.Response;
+ try{
+  response=await fetch(`${base.replace(/\/$/,'')}/submissions?base64_encoded=false&wait=true`,{method:'POST',headers,signal:AbortSignal.timeout(75_000),body:JSON.stringify({source_code:code,language_id:LANGUAGES[language],stdin,cpu_time_limit:5,memory_limit:128000})});
+ }catch(error){
+  const timedOut=error instanceof Error&&error.name==='TimeoutError';
+  throw Object.assign(new Error(timedOut?'The code runner timed out. Check that Judge0 is healthy and retry.':'Could not reach Judge0. Check that it is running and JUDGE0_URL is correct.'),{status:503});
+ }
+ if(!response.ok)throw Object.assign(new Error(`Judge0 returned HTTP ${response.status}. Check the runner service and authentication configuration.`),{status:response.status>=500?503:502});
+ try{
+  return await response.json() as {stdout?:string|null;stderr?:string|null;compile_output?:string|null;time?:string|null;memory?:number|null;status?:{id:number;description:string}};
+ }catch{
+  throw Object.assign(new Error('Judge0 returned an invalid response. Check the runner service logs.'),{status:502});
+ }
+}
 async function judge(code:string,language:string,stdin:string){if(process.env.CODE_RUNNER==='piston'&&process.env.NODE_ENV!=='production'){const base=process.env.PISTON_URL;if(!base){if(process.env.JUDGE0_URL)return judgeWithJudge0(code,language,stdin);throw Object.assign(new Error('Set PISTON_URL to enable the local code runner.'),{status:503});}try{return await executeWithPiston(base,code,language,stdin)}catch(error){const status=typeof error==='object'&&error!==null&&'status' in error?Number((error as {status?:number}).status):undefined;if(process.env.JUDGE0_URL&&(status===422||status===503||status===502||!status))return judgeWithJudge0(code,language,stdin);throw error}}return judgeWithJudge0(code,language,stdin)}
 function verdict(id:number|undefined){if(id===3)return 'Accepted';if(id===4)return 'Wrong Answer';if(id===5)return 'Time Limit Exceeded';if(id===6)return 'Compile Error';if(id&&id>=7&&id<=12)return 'Runtime Error';return 'Processing'}
 async function evaluateTests(slug:string,code:string,language:string,hidden:boolean|null){const cases=await db().query('SELECT stdin,expected_output FROM test_cases WHERE problem_slug=$1 AND ($2::boolean IS NULL OR hidden=$2) ORDER BY id',[slug,hidden]);const results=[];for(const test of cases.rows){const prepared=prepareProblemTestRun(slug,code,language,test.stdin),run=await judge(prepared.code,language,prepared.stdin),mapped=verdict(run.status?.id),lines=(run.stdout||'').trim().split(/\r?\n/).filter(Boolean),actual=lines.at(-1)||'';let passed=false;try{passed=mapped==='Accepted'&&outputsMatch(slug,JSON.parse(actual),JSON.parse(test.expected_output),test.stdin)}catch{passed=mapped==='Accepted'&&actual.trim()===String(test.expected_output).trim()}results.push({verdict:passed?'Accepted':mapped==='Accepted'?'Wrong Answer':mapped,passed,input:test.stdin,expected:test.expected_output,actual,stderr:run.stderr||run.compile_output||''})}return results}
 app.post('/api/problems/:slug/run',runLimit,async(req,res,next)=>{try{const input=runSchema.parse(req.body),slug=z.string().regex(/^[a-z0-9-]{1,100}$/).parse(req.params.slug),results=await evaluateTests(slug,input.code,input.language,false);res.json({results,passed:results.filter(item=>item.passed).length,total:results.length})}catch(error){next(error)}});
-app.post('/api/run',runLimit,async(req,res,next)=>{try{const input=runSchema.parse(req.body),result=await judge(input.code,input.language,input.stdin);res.json({verdict:verdict(result.status?.id),stdout:result.stdout||'',stderr:result.stderr||'',compileOutput:result.compile_output||'',time:result.time,memory:result.memory,status:result.status?.description})}catch(error){next(error)}});
+app.post('/api/run',runLimit,async(req,res,next)=>{try{const input=runSchema.parse(req.body),result=await judge(input.code,input.language,input.stdin),statusId=result.status?.id;res.json({verdict:verdict(statusId),stdout:result.stdout||'',stderr:result.stderr||'',compileOutput:result.compile_output||'',compileStdout:'compile_stdout' in result?result.compile_stdout||'':'',compileStderr:'compile_stderr' in result?result.compile_stderr||'':'',compileTime:'compile_time' in result?result.compile_time:null,compileExitCode:'compile_exit_code' in result?result.compile_exit_code:null,compileStatus:'compile_status' in result?result.compile_status:statusId===6?'failed':'not-reported',runtimeTime:result.time??null,exitCode:'exit_code' in result?result.exit_code:null,signal:'signal' in result?result.signal:null,memory:result.memory??null,status:result.status?.description})}catch(error){next(error)}});
 app.post('/api/problems/:slug/submit',auth,runLimit,async(req,res,next)=>{try{const input=runSchema.parse(req.body),slug=z.string().regex(/^[a-z0-9-]{1,100}$/).parse(req.params.slug),results=await evaluateTests(slug,input.code,input.language,null);if(!results.length){res.status(422).json({error:'This problem does not have test cases configured yet.'});return}const failed=results.find(item=>!item.passed),final=failed?.verdict||'Accepted',saved=await db().query('INSERT INTO submissions(user_id,problem_slug,language,source_code,verdict,stdout,stderr) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id,verdict,stdout,stderr,created_at',[userId(req),slug,input.language,input.code,final,failed?.actual||'',failed?.stderr||'']);res.json({submission:saved.rows[0],tests:results.length,passed:results.filter(item=>item.passed).length,results})}catch(error){next(error)}});
 app.use((err:unknown,req:Request,res:Response,_next:NextFunction)=>{
  if(err instanceof z.ZodError){res.status(400).json({error:'Invalid request.',details:err.issues.map(issue=>({path:issue.path,message:issue.message}))});return}

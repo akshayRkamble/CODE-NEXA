@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
+import { sqlProblems } from './sqlProblems';
+import { readSqlSolvedIds, SQL_PROGRESS_EVENT, SQL_PROGRESS_STORAGE_KEY } from './sqlProgress';
 
 type Plan = { id: string; title: string; durationDays: number; description: string };
 type PlanDay = { day: number; problems: string[] };
@@ -29,8 +31,22 @@ export default function ProgressDashboard({ count, total, signedIn }: { count: n
   const [leaders, setLeaders] = useState<Leader[]>([]);
   const [enrollment, setEnrollment] = useState<Enrollment | null>(null);
   const [progress, setProgress] = useState<Progress | null>(null);
+  const [sqlSolvedIds, setSqlSolvedIds] = useState<number[]>(readSqlSolvedIds);
   const [message, setMessage] = useState('');
   const [loadingProgress, setLoadingProgress] = useState(false);
+
+  useEffect(() => {
+    const refreshSqlProgress = () => setSqlSolvedIds(readSqlSolvedIds());
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === SQL_PROGRESS_STORAGE_KEY) refreshSqlProgress();
+    };
+    window.addEventListener('storage', handleStorage);
+    window.addEventListener(SQL_PROGRESS_EVENT, refreshSqlProgress);
+    return () => {
+      window.removeEventListener('storage', handleStorage);
+      window.removeEventListener(SQL_PROGRESS_EVENT, refreshSqlProgress);
+    };
+  }, []);
 
   useEffect(() => {
     fetch('/api/study-plans').then(r => r.ok ? r.json() : null).then(data => setPlans(data?.items || [])).catch(() => {});
@@ -99,12 +115,13 @@ export default function ProgressDashboard({ count, total, signedIn }: { count: n
   return <div className="dashboard">
     <small className="eyebrow">YOUR LEARNING OVERVIEW</small>
     <h1>Progress</h1>
-    <p>{signedIn ? 'Your accepted solutions and practice activity sync with your account.' : 'Sign in to sync solved problems and practice activity across devices.'}</p>
+    <p>{signedIn ? 'Your accepted solutions and practice activity sync with your account. SQL practice progress is saved in this browser.' : 'Sign in to sync solved problems and practice activity across devices. SQL practice progress is saved in this browser.'}</p>
     <div className="stats">
       <div className="stat stat-progress"><span>Problems solved</span><strong>{solvedCount}<small> / {total}</small></strong><div className="stat-meter" role="progressbar" aria-label="Problems solved" aria-valuemin={0} aria-valuemax={total} aria-valuenow={Math.min(solvedCount, total)}><i style={{ width: `${total ? Math.min(100, 100 * solvedCount / total) : 0}%` }} /></div><small>{signedIn ? 'Account accepted solutions' : 'This browser'}</small></div>
       <div className="stat"><span>Current streak</span><strong>{signedIn ? `${streak} ${streak === 1 ? 'day' : 'days'}` : '—'}</strong><small>{signedIn ? 'Consecutive days with submissions' : 'Sign in to track your streak'}</small></div>
       <div className="stat"><span>Acceptance rate</span><strong>{signedIn ? `${acceptance}%` : '—'}</strong><small>{signedIn ? `${totalAttempts} total submissions` : 'Account statistic'}</small></div>
       <div className="stat"><span>Study plan</span><strong>{selected === '30-day' ? '30' : '60'} days</strong><small>{taskComplete ? `Day ${today} complete` : task ? `Day ${today} of ${days.length}` : enrollment?.planId === selected ? 'Plan complete' : 'Not started'}</small></div>
+      <div className="stat"><span>SQL practice</span><strong>{sqlSolvedIds.length}<small> / {sqlProblems.length}</small></strong><div className="stat-meter" role="progressbar" aria-label="SQL exercises solved" aria-valuemin={0} aria-valuemax={sqlProblems.length} aria-valuenow={sqlSolvedIds.length}><i style={{ width: `${100 * sqlSolvedIds.length / sqlProblems.length}%` }} /></div><small>Saved in this browser</small></div>
     </div>
 
     <div className="dash-cards">

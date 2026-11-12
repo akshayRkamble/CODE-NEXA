@@ -112,8 +112,15 @@ export type RunnerResult = {
   stdout: string | null;
   stderr: string | null;
   compile_output: string | null;
+  compile_stdout: string | null;
+  compile_stderr: string | null;
+  compile_time: string | null;
+  compile_exit_code: number | null;
   time: string | null;
+  exit_code: number | null;
+  signal: string | null;
   memory: number | null;
+  compile_status: 'passed' | 'failed' | 'not-reported';
   status: { id: number; description: string };
 };
 
@@ -161,11 +168,18 @@ export async function executeWithPiston(base: string, code: string, language: st
   const accepted = !failedCompile && !timedOut && result.run.code === 0;
 
   return {
-    stdout: result.run.stdout || null,
-    stderr: result.run.stderr || null,
-    compile_output: result.compile?.stderr || result.compile?.stdout || null,
-    time: result.run.wall_time === undefined ? null : (result.run.wall_time / 1000).toFixed(3),
-    memory: result.run.memory === undefined ? null : Math.round(result.run.memory / 1024),
+    stdout: failedCompile ? null : result.run.stdout || null,
+    stderr: failedCompile ? null : result.run.stderr || null,
+    compile_output: result.compile?.stderr || (failedCompile ? result.compile?.stdout : null) || null,
+    compile_stdout: result.compile?.stdout || null,
+    compile_stderr: result.compile?.stderr || null,
+    compile_time: result.compile?.wall_time === undefined ? null : (result.compile.wall_time / 1000).toFixed(3),
+    compile_exit_code: result.compile?.code ?? null,
+    time: failedCompile || result.run.wall_time === undefined ? null : (result.run.wall_time / 1000).toFixed(3),
+    exit_code: failedCompile ? null : result.run.code ?? null,
+    signal: failedCompile ? null : result.run.signal ?? null,
+    memory: failedCompile || result.run.memory === undefined ? null : Math.round(result.run.memory / 1024),
+    compile_status: result.compile ? failedCompile ? 'failed' : 'passed' : 'not-reported',
     status: {
       id: failedCompile ? 6 : timedOut ? 5 : accepted ? 3 : 11,
       description: failedCompile ? 'Compilation Error' : timedOut ? 'Time Limit Exceeded' : accepted ? 'Accepted' : 'Runtime Error'

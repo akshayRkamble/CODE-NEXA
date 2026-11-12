@@ -12,6 +12,7 @@ import { problemCases } from './problem-tests';
 import { sqlProblems } from '../src/sqlProblems';
 import { executeWithPiston } from './piston-runner';
 import { balancedBracketsStarters } from '../src/problemLanguageStarters';
+import { standaloneStarters } from '../src/editorLanguages';
 
 describe('Balanced Brackets language starters',()=>{
  it('provides a solution using the supported language names and JSON stdin/output contract',()=>{
@@ -24,6 +25,14 @@ describe('Balanced Brackets language starters',()=>{
    expect(starter).not.toContain('Console.WriteLine("null")');
    expect(starter).not.toContain('puts("null")');
   }
+ });
+});
+describe('standalone language starters',()=>{
+ it('provides version-compatible stdin/stdout programs for every standalone practice language',()=>{
+  const languages=['python','java','c','cpp','csharp','go','rust','php','ruby','kotlin'];
+  expect(Object.keys(standaloneStarters).sort()).toEqual([...languages].sort());
+  expect(standaloneStarters.go).not.toMatch(/\bany\b/);
+  expect(standaloneStarters.kotlin).toContain('joinToString("\\n")');
  });
 });
 
@@ -109,6 +118,72 @@ describe('AI provider errors',()=>{
     expect(requestUrl).toBe('http://localhost:2000/api/v2/execute');
     expect(requestBody).toMatchObject({language:'javascript',version:'20.11.1',run_timeout:10000,run_memory_limit:134217728});
     expect(result).toMatchObject({stdout:'[0,1]\n',time:'1.200',memory:4,status:{id:3,description:'Accepted'}});
+   }finally{globalThis.fetch=originalFetch}
+  });
+  it('does not report successful compiler banners as compiler errors',async()=>{
+   const originalFetch=globalThis.fetch;
+   globalThis.fetch=async(input)=>{
+    if(String(input).endsWith('/api/v2/runtimes'))return Response.json([{language:'csharp',version:'6.12.0',aliases:['c#']}]);
+    return Response.json({
+     compile:{stdout:'C# compiler version',stderr:'',code:0},
+     run:{stdout:'ok\n',stderr:'',code:0,signal:null}
+    });
+   };
+   try{
+    const result=await executeWithPiston('http://localhost:2000','class Program {}','csharp','');
+    expect(result.status).toMatchObject({id:3,description:'Accepted'});
+    expect(result.compile_output).toBeNull();
+   }finally{globalThis.fetch=originalFetch}
+  });
+  it('preserves separate compiler and runtime timings and diagnostics',async()=>{
+   const originalFetch=globalThis.fetch;
+   globalThis.fetch=async(input)=>{
+    if(String(input).endsWith('/api/v2/runtimes'))return Response.json([{language:'c++',version:'8.3.0',aliases:['cpp']}]);
+    return Response.json({
+     compile:{stdout:'compiler note\n',stderr:'',code:0,wall_time:245},
+     run:{stdout:'partial output\n',stderr:'main.cpp:4: runtime failure\n',code:1,signal:null,memory:4096,wall_time:38}
+    });
+   };
+   try{
+    const result=await executeWithPiston('http://localhost:2000','int main() { return 1; }','cpp','');
+    expect(result).toMatchObject({
+     compile_stdout:'compiler note\n',
+     compile_stderr:null,
+     compile_time:'0.245',
+     compile_exit_code:0,
+     compile_status:'passed',
+     stdout:'partial output\n',
+     stderr:'main.cpp:4: runtime failure\n',
+     time:'0.038',
+     exit_code:1,
+     signal:null,
+     status:{id:11,description:'Runtime Error'}
+    });
+   }finally{globalThis.fetch=originalFetch}
+  });
+  it('preserves compiler diagnostics and compile time when compilation fails',async()=>{
+   const originalFetch=globalThis.fetch;
+   globalThis.fetch=async(input)=>{
+    if(String(input).endsWith('/api/v2/runtimes'))return Response.json([{language:'rust',version:'1.68.2'}]);
+    return Response.json({
+     compile:{stdout:'',stderr:'error: expected `;`\n',code:1,wall_time:512},
+     run:{stdout:'',stderr:'error: expected `;`\n',code:1,signal:null,wall_time:512,memory:4096}
+    });
+   };
+   try{
+    const result=await executeWithPiston('http://localhost:2000','fn main() {}','rust','');
+    expect(result).toMatchObject({
+     compile_output:'error: expected `;`\n',
+     compile_stderr:'error: expected `;`\n',
+     compile_time:'0.512',
+     compile_exit_code:1,
+     compile_status:'failed',
+     stderr:null,
+     time:null,
+     exit_code:null,
+     memory:null,
+     status:{id:6,description:'Compilation Error'}
+    });
    }finally{globalThis.fetch=originalFetch}
   });
   it('uses the installed runtime catalog before sending the execute request',async()=>{

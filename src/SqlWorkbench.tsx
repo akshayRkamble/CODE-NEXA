@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { sqlProblems } from './sqlProblems';
+import { markSqlProblemSolved, readSqlSolvedIds } from './sqlProgress';
 import Icon from './Icon';
 
 type Dataset = 'Employees' | 'Orders' | 'Library';
@@ -17,6 +18,7 @@ export default function SqlWorkbench({ signedIn, onRequireSignIn }: Props) {
   const [result, setResult] = useState<QueryResult | null>(null);
   const [message, setMessage] = useState('Run a query to see results.');
   const [history, setHistory] = useState<string[]>(() => JSON.parse(localStorage.getItem('nexa-sql-history') || '[]'));
+  const [solvedIds, setSolvedIds] = useState<number[]>(readSqlSolvedIds);
   const [aiBusy, setAiBusy] = useState(false);
   const task = sqlProblems.find(item => item.id === taskId) || sqlProblems[0];
 
@@ -34,7 +36,7 @@ export default function SqlWorkbench({ signedIn, onRequireSignIn }: Props) {
   function run(check = false, queryText = query): Promise<boolean> {
     setMessage(check ? 'Checking your answer...' : 'Running query...');
     return new Promise(resolve => {
-      const worker = new Worker(new URL('./workers/sql.worker.ts', import.meta.url), { type: 'module' });
+      const worker = new Worker(new URL('./lib/workers/sql.worker.ts', import.meta.url), { type: 'module' });
       worker.onmessage = (event: MessageEvent<Reply>) => {
         worker.terminate();
         if (!event.data.ok) {
@@ -53,6 +55,13 @@ export default function SqlWorkbench({ signedIn, onRequireSignIn }: Props) {
         setMessage(check
           ? accepted ? 'Accepted - result matches the reference.' : 'Not quite - compare your result with the prompt.'
           : `${next.rows.length} rows - ${next.elapsed} ms`);
+        if (check && accepted) {
+          try {
+            setSolvedIds(markSqlProblemSolved(task.id));
+          } catch {
+            setMessage('Accepted, but SQL practice progress could not be saved in this browser.');
+          }
+        }
         const updated = [queryText, ...history.filter(item => item !== queryText)].slice(0, 20);
         setHistory(updated);
         localStorage.setItem('nexa-sql-history', JSON.stringify(updated));
@@ -121,11 +130,11 @@ export default function SqlWorkbench({ signedIn, onRequireSignIn }: Props) {
     <small className="eyebrow">IN-BROWSER QUERY WORKBENCH</small>
     <h1>Explore your data</h1>
     <div className="sql-practice">
-      <label htmlFor="sql-task">SQL practice - 50 original prompts</label>
+      <label htmlFor="sql-task">SQL practice - {solvedIds.length} / {sqlProblems.length} solved</label>
       <select id="sql-task" value={taskId} onChange={event => selectTask(Number(event.target.value))}>
-        {sqlProblems.map(item => <option value={item.id} key={item.id}>{String(item.id).padStart(2, '0')} - {item.title} [{item.topic}]</option>)}
+        {sqlProblems.map(item => <option value={item.id} key={item.id}>{String(item.id).padStart(2, '0')} - {item.title} [{item.topic}]{solvedIds.includes(item.id) ? ' [Solved]' : ''}</option>)}
       </select>
-      <p>{task.prompt}</p>
+      <p>{task.prompt}{solvedIds.includes(task.id) && <strong> · Completed</strong>}</p>
       <div className="sql-practice-actions">
         <button className="outline" onClick={() => setShowSolution(!showSolution)}>{showSolution ? 'Hide reference query' : 'Show reference query'}</button>
         <button className="run sql-ai-solve" onClick={solveWithAi} disabled={aiBusy}>
