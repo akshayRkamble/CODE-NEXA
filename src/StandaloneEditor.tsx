@@ -18,13 +18,12 @@ type RunResult = {
   compileOutput?: string;
   compileStdout?: string;
   compileStderr?: string;
-  compileTime?: string | null;
   compileExitCode?: number | null;
   compileStatus?: 'passed' | 'failed' | 'not-reported';
-  runtimeTime?: string | null;
   exitCode?: number | null;
   signal?: string | null;
-  memory?: number | null;
+  runnerMessage?: string | null;
+  runnerStatus?: string | null;
   status?: string;
   error?: string;
 };
@@ -51,6 +50,50 @@ const starterCode: Record<PracticeLanguage, string> = {
   ruby: 'puts "Hello, NexaCode!"\n',
   kotlin: 'fun main() {\n    println("Hello, NexaCode!")\n}\n'
 };
+
+const projectExamples = {
+  'javascript-task-tracker': {
+    name: 'task-tracker.js',
+    language: 'javascript' as const,
+    code: [
+      'const tasks = [];',
+      '',
+      'function addTask(title) {',
+      '  const task = { title, done: false };',
+      '  tasks.push(task);',
+      '  return task;',
+      '}',
+      '',
+      'function completeTask(title) {',
+      '  const task = tasks.find(item => item.title === title);',
+      '  if (task) task.done = true;',
+      '}',
+      '',
+      'addTask("Sketch the project");',
+      'addTask("Build the first feature");',
+      'completeTask("Sketch the project");',
+      'console.table(tasks);',
+      ''
+    ].join('\n')
+  },
+  'python-text-analyzer': {
+    name: 'text-analyzer.py',
+    language: 'python' as const,
+    code: [
+      'from collections import Counter',
+      'import re',
+      '',
+      'text = "Small projects are a fun way to practice code."',
+      'words = re.findall(r"[a-z]+", text.lower())',
+      'counts = Counter(words)',
+      '',
+      'print(f"Words: {len(words)}")',
+      'print(f"Unique words: {len(counts)}")',
+      'print(f"Most common: {counts.most_common(3)}")',
+      ''
+    ].join('\n')
+  }
+} as const;
 
 const initialFile: EditorFile = {
   id: 'main.js',
@@ -153,6 +196,29 @@ export default function StandaloneEditor({ onOpenPractice, theme }: Props) {
     setRunStatus('idle');
   }
 
+  function createExample(exampleId: string) {
+    const example = projectExamples[exampleId as keyof typeof projectExamples];
+    if (!example || files.some(file => file.name === example.name)) {
+      setOutput(example ? `${example.name} is already in this project.` : 'Choose a project example.');
+      setRunStatus('idle');
+      setRunResult(null);
+      return;
+    }
+
+    const file: EditorFile = {
+      id: `${Date.now()}-${example.name}`,
+      name: example.name,
+      language: example.language,
+      code: example.code
+    };
+    setFiles(current => [...current, file]);
+    setActiveId(file.id);
+    setConsoleTab('output');
+    setRunResult(null);
+    setOutput(`Added ${example.name}. Select Run to try it.`);
+    setRunStatus('idle');
+  }
+
   function deleteFile(file: EditorFile) {
     if (files.length === 1) return;
     const remaining = files.filter(item => item.id !== file.id);
@@ -160,10 +226,10 @@ export default function StandaloneEditor({ onOpenPractice, theme }: Props) {
     if (activeId === file.id) setActiveId(remaining[0].id);
   }
 
-  async function runCode(asDebugRun = false) {
+  async function runCode() {
     setConsoleTab('output');
     setRunResult(null);
-    setOutput(asDebugRun ? 'Starting sandboxed debug run…' : 'Running in the code sandbox…');
+    setOutput('Running your program in the code sandbox…');
     setRunStatus('running');
     try {
       const response = await fetch('/api/run', {
@@ -180,7 +246,7 @@ export default function StandaloneEditor({ onOpenPractice, theme }: Props) {
       if (!response.ok) throw new Error(result.error || 'Code execution failed.');
       setRunResult(result);
       setOutput('');
-      setRunStatus(result.verdict === 'Accepted' ? 'done' : 'error');
+      setRunStatus('done');
     } catch (error) {
       setRunResult(null);
       setOutput(error instanceof Error ? error.message : 'Could not run code.');
@@ -196,9 +262,16 @@ export default function StandaloneEditor({ onOpenPractice, theme }: Props) {
 
   const topActions = (
     <div className="standalone-actions">
+      <label className="standalone-example">
+        <span>Try an example</span>
+        <select aria-label="Add a small project example" value="" onChange={event => createExample(event.target.value)}>
+          <option value="">Add an example…</option>
+          <option value="javascript-task-tracker">JavaScript task tracker</option>
+          <option value="python-text-analyzer">Python text analyzer</option>
+        </select>
+      </label>
       <button type="button" className="outline" onClick={() => { setCreatingFile(true); setShowFiles(true); }}>New file</button>
       <button type="button" className="outline" onClick={() => { updateActiveFile({ code: starterCode[activeFile.language] }); setOutput('Starter code restored.'); setRunStatus('idle'); }}>Reset</button>
-      <button type="button" className="outline" onClick={() => void runCode(true)} disabled={runStatus === 'running'}>Debug</button>
       <button type="button" className="standalone-run" onClick={() => void runCode()} disabled={runStatus === 'running'}><Icon name="play"/>{runStatus === 'running' ? 'Running…' : 'Run'}</button>
     </div>
   );
@@ -209,7 +282,7 @@ export default function StandaloneEditor({ onOpenPractice, theme }: Props) {
         <div>
           <small className="eyebrow">CODE WORKSPACE</small>
           <h1>Editor</h1>
-          <p>Write and run programs in an isolated sandbox.</p>
+          <p>Build small projects, try examples, or run code in a safe sandbox.</p>
         </div>
         {topActions}
       </header>
@@ -286,12 +359,11 @@ export default function StandaloneEditor({ onOpenPractice, theme }: Props) {
                       <span>{activeFile.name} · {languageInfo.label}</span>
                       {runResult.signal && <span>Signal: {runResult.signal}</span>}
                     </div>
-                    <div className="terminal-metrics">
-                      <div><span>Compile</span><strong>{runResult.compileTime !== null && runResult.compileTime !== undefined ? `${runResult.compileTime}s` : 'Not reported'}</strong></div>
-                      <div><span>Runtime</span><strong>{runResult.runtimeTime !== null && runResult.runtimeTime !== undefined ? `${runResult.runtimeTime}s` : 'Not reported'}</strong></div>
-                      <div><span>Memory</span><strong>{runResult.memory !== null && runResult.memory !== undefined ? `${runResult.memory} KB` : 'Not reported'}</strong></div>
-                      <div><span>Exit code</span><strong>{runResult.exitCode ?? 'Not reported'}</strong></div>
-                    </div>
+                    {runResult.runnerMessage && <p className="terminal-runner-message" role="status">
+                      {runResult.status === 'Execution Stopped'
+                        ? `${runResult.runnerMessage} The sandbox stopped this run to keep the workspace responsive.`
+                        : runResult.runnerMessage}
+                    </p>}
                     <section className={`terminal-stage ${runResult.compileStatus === 'failed' ? 'failed' : ''}`}>
                       <h2>Compiler <span>{runResult.compileStatus === 'passed' ? 'SUCCEEDED' : runResult.compileStatus === 'failed' ? 'FAILED' : 'NOT REPORTED'}</span></h2>
                       {runResult.compileOutput && !runResult.compileStdout && !runResult.compileStderr && <pre className="terminal-diagnostic">{runResult.compileOutput}</pre>}
@@ -312,7 +384,6 @@ export default function StandaloneEditor({ onOpenPractice, theme }: Props) {
                   </div>
                 : <pre className={`standalone-output ${runStatus === 'error' ? 'terminal-error' : ''}`}>{output || 'Terminal cleared.'}</pre>}
           </section>
-          <div className="debug-notice">Debug runs return sandbox diagnostics. Interactive breakpoints and step-through debugging are not supported by the configured runner.</div>
         </section>
       </div>
       <div className="standalone-footer-actions">

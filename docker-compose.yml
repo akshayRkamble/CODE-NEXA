@@ -15,6 +15,25 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+  piston:
+    image: ghcr.io/engineer-man/piston:latest
+    container_name: nexacode-piston
+    profiles: [piston]
+    privileged: true
+    ports: ["127.0.0.1:2000:2000"]
+    environment:
+      PISTON_RUN_TIMEOUT: "30000"
+      PISTON_RUN_CPU_TIME: "30000"
+      PISTON_RUN_MEMORY_LIMIT: "536870912"
+      PISTON_COMPILE_TIMEOUT: "60000"
+      PISTON_COMPILE_CPU_TIME: "60000"
+      PISTON_COMPILE_MEMORY_LIMIT: "1073741824"
+      PISTON_MAX_PROCESS_COUNT: "60"
+      PISTON_MAX_CONCURRENT_JOBS: "4"
+      PISTON_OUTPUT_MAX_SIZE: "65536"
+      PISTON_DISABLE_NETWORKING: "true"
+    volumes: [piston_data:/piston]
+    restart: unless-stopped
   judge0-db:
     image: postgres:16.2
     profiles: [execution]
@@ -45,4 +64,6 @@ services:
     restart: unless-stopped
 volumes:
   nexacode_data:
+  piston_data:
+    name: nexacode_piston_data
   judge0_data:

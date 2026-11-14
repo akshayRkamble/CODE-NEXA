@@ -9,6 +9,12 @@ type RuntimeDefinition = {
   compileTimeout?: number;
 };
 
+export type RunnerExecutionLimits = {
+  runTimeoutMs?: number;
+  runMemoryLimitBytes?: number;
+  compileTimeoutMs?: number;
+};
+
 const runtimes: Record<string, RuntimeDefinition> = {
   javascript: { language: 'javascript', version: '20.11.1', file: 'main.js', aliases: ['node', 'node-js', 'node-javascript', 'js'] },
   typescript: { language: 'typescript', version: '5.0.3', file: 'main.ts', aliases: ['ts'] },
@@ -100,7 +106,9 @@ const outputSchema = z.object({
   code: z.number().nullable().optional(),
   signal: z.string().nullable().optional(),
   memory: z.number().optional(),
-  wall_time: z.number().optional()
+  wall_time: z.number().optional(),
+  message: z.string().nullable().optional(),
+  status: z.string().nullable().optional()
 });
 
 const responseSchema = z.object({
@@ -120,33 +128,47 @@ export type RunnerResult = {
   exit_code: number | null;
   signal: string | null;
   memory: number | null;
+  runner_message: string | null;
+  runner_status: string | null;
   compile_status: 'passed' | 'failed' | 'not-reported';
   status: { id: number; description: string };
 };
 
-export async function executeWithPiston(base: string, code: string, language: string, stdin: string): Promise<RunnerResult> {
+export async function executeWithPiston(
+  base: string,
+  code: string,
+  language: string,
+  stdin: string,
+  limits: RunnerExecutionLimits = {}
+): Promise<RunnerResult> {
   const runtime = await resolveRuntime(base, language);
   if (!runtime) throw Object.assign(new Error(`This language is not supported by the local runner: ${language}.`), { status: 422 });
 
+  const compileTimeoutMs = limits.compileTimeoutMs ?? runtime.compileTimeout ?? 20_000;
+  const runTimeoutMs = limits.runTimeoutMs ?? 10_000;
+  const runMemoryLimitBytes = limits.runMemoryLimitBytes ?? 134_217_728;
   let response: Response;
   try {
     response = await fetch(`${base.replace(/\/+$/, '')}/api/v2/execute`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      signal: AbortSignal.timeout(75_000),
+      signal: AbortSignal.timeout(compileTimeoutMs + runTimeoutMs + 15_000),
       body: JSON.stringify({
         language: runtime.language,
         version: runtime.version,
         files: [{ name: runtime.file, content: code }],
         stdin,
-        compile_timeout: runtime.compileTimeout ?? 20_000,
-        run_timeout: 10_000,
+        compile_timeout: compileTimeoutMs,
+        run_timeout: runTimeoutMs,
         compile_memory_limit: runtime.compileMemoryLimit ?? 268_435_456,
-        run_memory_limit: 134_217_728
+        run_memory_limit: runMemoryLimitBytes
       })
     });
   } catch {
-    throw Object.assign(new Error('Could not reach the local code runner. Check that Piston is running.'), { status: 503 });
+    throw Object.assign(new Error('Could not reach the local code runner. Start Docker Desktop and the Piston service, then retry.'), {
+      status: 503,
+      code: 'RUNNER_UNAVAILABLE'
+    });
   }
 
   let payload: unknown;
@@ -164,7 +186,9 @@ export async function executeWithPiston(base: string, code: string, language: st
 
   const result = responseSchema.parse(payload);
   const failedCompile = result.compile && result.compile.code !== 0;
-  const timedOut = result.run.signal === 'SIGKILL';
+  const runnerMessage = result.run.message?.trim() || null;
+  const timedOut = result.run.status === 'TO' || /time limit exceeded|timed out/i.test(runnerMessage || '');
+  const memoryLimitExceeded = /memory limit exceeded|out of memory/i.test(runnerMessage || '');
   const accepted = !failedCompile && !timedOut && result.run.code === 0;
 
   return {
@@ -179,10 +203,12 @@ export async function executeWithPiston(base: string, code: string, language: st
     exit_code: failedCompile ? null : result.run.code ?? null,
     signal: failedCompile ? null : result.run.signal ?? null,
     memory: failedCompile || result.run.memory === undefined ? null : Math.round(result.run.memory / 1024),
+    runner_message: runnerMessage,
+    runner_status: result.run.status ?? null,
     compile_status: result.compile ? failedCompile ? 'failed' : 'passed' : 'not-reported',
     status: {
-      id: failedCompile ? 6 : timedOut ? 5 : accepted ? 3 : 11,
-      description: failedCompile ? 'Compilation Error' : timedOut ? 'Time Limit Exceeded' : accepted ? 'Accepted' : 'Runtime Error'
+      id: failedCompile ? 6 : timedOut ? 5 : memoryLimitExceeded ? 13 : accepted ? 3 : 11,
+      description: failedCompile ? 'Compilation Error' : timedOut ? 'Time Limit Exceeded' : memoryLimitExceeded ? 'Memory Limit Exceeded' : accepted ? 'Accepted' : 'Runtime Error'
     }
   };
 }

@@ -1,9 +1,11 @@
-import { lazy, Suspense, useEffect, useState, type CSSProperties } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState, type CSSProperties } from 'react';
 import Icon, { type IconName } from './Icon';
 import SqlWorkbench from './SqlWorkbench';
 import TutorPanel from './TutorPanelWithFeedback';
 import ProgressDashboard from './ProgressDashboard';
+import ChatSection from './ChatSection';
 import AuthDialog, { type SessionUser } from './AuthDialogFixed';
+import HomePage from './HomePage';
 import { balancedBracketsStarters } from './problemLanguageStarters';
 import { getPracticeLanguage, practiceLanguages, standaloneStarters, type PracticeLanguage } from './editorLanguages';
 const CodeEditor = lazy(() => import('./CodeEditor'));
@@ -24,37 +26,63 @@ const problems=[
 {id:12,title:'Search a Sorted Grid',level:'Hard',topic:'Binary Search',description:'Rows are sorted and each row begins above the previous row’s end. Return whether target is present.',starter:'function searchGrid(grid, target) {\n  // Your solution\n}',sample:'Input: [[1,4,7],[9,12,16]], target 12\nOutput: true',hints:['Treat the matrix as one sorted sequence.','Map flat index to row and column.','Binary search all positions.']}
 ];
 const slugById:Record<number,string>={1:'pair-sum',2:'balanced-brackets',3:'longest-unique-window',4:'merge-time-blocks',5:'widest-tree-level',6:'ways-up-the-steps',7:'rotate-grid',8:'graph-reachability',9:'minimum-coin-count',10:'find-a-cycle',11:'product-except-self',12:'search-sorted-grid'};
-const activityItems: {name:string;icon:IconName}[]=[{name:'Practice',icon:'practice'},{name:'Editor',icon:'editor'},{name:'SQL',icon:'sql'},{name:'Progress',icon:'progress'}];
+const activityItems: {name:string;icon:IconName}[]=[{name:'Home',icon:'home'},{name:'Practice',icon:'practice'},{name:'Editor',icon:'editor'},{name:'SQL',icon:'sql'},{name:'Chat',icon:'chat'},{name:'Progress',icon:'progress'}];
 const starterFor=(language:PracticeLanguage,javascriptStarter:string)=>/function isBalanced\s*\(/.test(javascriptStarter)?balancedBracketsStarters[language]||javascriptStarter:language==='javascript'||language==='typescript'?javascriptStarter:standaloneStarters[language]||'// Read the JSON test input from stdin and print the JSON result to stdout.';
 export default function App(){
  const [initialLanguage] = useState<PracticeLanguage>(()=>getPracticeLanguage(localStorage.getItem('nexa-language')||'javascript').id);
  const [questionsVisible,setQuestionsVisible]=useState(true);
  const [codingPanelMode,setCodingPanelMode]=useState<'normal'|'maximized'|'minimized'>('normal');
- const [problemList,setProblemList]=useState<Problem[]>(()=>problems.map(p=>({...p,slug:slugById[p.id]}))),[view,setView]=useState('Practice'),[problem,setProblem]=useState<Problem>(()=>({...problems[0],slug:slugById[1]})),[filter,setFilter]=useState('All'),[search,setSearch]=useState(''),[language,setLanguage]=useState<PracticeLanguage>(initialLanguage),[tab,setTab]=useState('Description'),[consoleTab,setConsoleTab]=useState<'Testcase'|'Test Result'>('Testcase'),[splitPercent,setSplitPercent]=useState(47),[consoleHeight,setConsoleHeight]=useState(225),[code,setCode]=useState(()=>{const saved=localStorage.getItem(`nexa-code-1-${initialLanguage}`);return saved||(['javascript','typescript'].includes(initialLanguage)?localStorage.getItem('nexa-code-1')||problems[0].starter:starterFor(initialLanguage,problems[0].starter))}),[output,setOutput]=useState('Ready when you are. Run your code to see output.'),[referenceSolution,setReferenceSolution]=useState<string|null>(null),[referenceAvailable,setReferenceAvailable]=useState(false),[solved,setSolved]=useState<number[]>(()=>JSON.parse(localStorage.getItem('nexa-solved')||'[]')),[font,setFont]=useState(()=>Number(localStorage.getItem('nexa-font-size'))||13),[hints,setHints]=useState<Record<number,number>>({}),[theme,setTheme]=useState(()=>localStorage.getItem('nexa-theme')==='light'),[bookmarks,setBookmarks]=useState<string[]>(()=>JSON.parse(localStorage.getItem('nexa-bookmarks')||'[]')),[note,setNote]=useState(()=>localStorage.getItem('note-1')||''),[authOpen,setAuthOpen]=useState(false),[aiSolveBusy,setAiSolveBusy]=useState(false),[user,setUser]=useState<SessionUser|null>(null);
+ const [problemList,setProblemList]=useState<Problem[]>(()=>problems.map(p=>({...p,slug:slugById[p.id]}))),[view,setView]=useState('Home'),[problem,setProblem]=useState<Problem>(()=>({...problems[0],slug:slugById[1]})),[filter,setFilter]=useState('All'),[search,setSearch]=useState(''),[language,setLanguage]=useState<PracticeLanguage>(initialLanguage),[tab,setTab]=useState('Description'),[consoleTab,setConsoleTab]=useState<'Testcase'|'Test Result'>('Testcase'),[splitPercent,setSplitPercent]=useState(47),[consoleHeight,setConsoleHeight]=useState(225),[code,setCode]=useState(()=>{const saved=localStorage.getItem(`nexa-code-1-${initialLanguage}`);return saved||(['javascript','typescript'].includes(initialLanguage)?localStorage.getItem('nexa-code-1')||problems[0].starter:starterFor(initialLanguage,problems[0].starter))}),[output,setOutput]=useState('Ready when you are. Run your code to see output.'),[referenceSolution,setReferenceSolution]=useState<string|null>(null),[referenceAvailable,setReferenceAvailable]=useState(false),[solved,setSolved]=useState<number[]>(()=>JSON.parse(localStorage.getItem('nexa-solved')||'[]')),[font,setFont]=useState(()=>Number(localStorage.getItem('nexa-font-size'))||13),[hints,setHints]=useState<Record<number,number>>({}),[theme,setTheme]=useState(()=>localStorage.getItem('nexa-theme')==='light'),[bookmarks,setBookmarks]=useState<string[]>(()=>JSON.parse(localStorage.getItem('nexa-bookmarks')||'[]')),[note,setNote]=useState(()=>localStorage.getItem('note-1')||''),[authOpen,setAuthOpen]=useState(false),[aiSolveBusy,setAiSolveBusy]=useState(false),[user,setUser]=useState<SessionUser|null>(null),[profileMenuOpen,setProfileMenuOpen]=useState(false),[profileError,setProfileError]=useState(''),[logoutBusy,setLogoutBusy]=useState(false);
+ const consoleDrag=useRef<{pointerId:number;startY:number;startHeight:number}|null>(null);
+ const profileRef=useRef<HTMLDivElement>(null);
  const [wordWrap,setWordWrap]=useState(false),[minimap,setMinimap]=useState(true),[cursorPosition,setCursorPosition]=useState({line:1,column:1,lineCount:1});
  useEffect(()=>{let active=true;(async()=>{try{const first=await fetch('/api/problems?page=1&limit=100').then(r=>r.ok?r.json():null);if(!first?.items?.length)return;let items=[...first.items];for(let page=2;page<=Math.ceil(first.total/100);page++){const next=await fetch(`/api/problems?page=${page}&limit=100`).then(r=>r.ok?r.json():null);if(next?.items)items.push(...next.items)}if(!active)return;const mapped=items.map((p:{slug:string;title:string;topic:string;difficulty:string;description:string;examples:{input:string;output:string}[];hints:string[];starterCode?:{javascript?:string}},index)=>({id:index+1,slug:p.slug,title:p.title,level:p.difficulty,topic:p.topic,description:p.description,starter:p.starterCode?.javascript||'// Implement the requested function',sample:p.examples?.[0]?`Input: ${p.examples[0].input}\nOutput: ${p.examples[0].output}`:'No example available.',hints:p.hints||[]}));setProblemList(mapped);setProblem(current=>mapped.find(p=>p.slug===current.slug)||mapped[0]);}catch{/* Keep the bundled starter list available when the API is offline. */}})();return()=>{active=false}},[]);useEffect(()=>{localStorage.setItem(`nexa-code-${problem.id}-${language}`,code);if(language==='javascript')localStorage.setItem('nexa-code-'+problem.id,code)},[problem,code,language]);
  useEffect(()=>{localStorage.setItem('nexa-language',language);localStorage.setItem('nexa-font-size',String(font));localStorage.setItem('nexa-theme',theme?'light':'dark')},[font,language,theme]);
  useEffect(()=>{fetch('/api/auth/me',{credentials:'include'}).then(r=>r.ok?r.json():null).then(data=>{if(data?.user)setUser(data.user)}).catch(()=>{})},[]);
+ useEffect(()=>{if(!profileMenuOpen)return;const closeOutside=(event:PointerEvent)=>{if(!profileRef.current?.contains(event.target as Node))setProfileMenuOpen(false)};const closeOnEscape=(event:KeyboardEvent)=>{if(event.key==='Escape'){setProfileMenuOpen(false)}};document.addEventListener('pointerdown',closeOutside);window.addEventListener('keydown',closeOnEscape);return()=>{document.removeEventListener('pointerdown',closeOutside);window.removeEventListener('keydown',closeOnEscape)}},[profileMenuOpen]);
  useEffect(()=>{if(!user)return;fetch('/api/bookmarks',{credentials:'include'}).then(r=>r.ok?r.json():null).then(data=>{if(data?.items){const next=data.items.map((x:{problem_slug:string})=>x.problem_slug);setBookmarks(next);localStorage.setItem('nexa-bookmarks',JSON.stringify(next))}}).catch(()=>{})},[user]);
  useEffect(()=>{if(!user)return;fetch('/api/progress',{credentials:'include'}).then(r=>r.ok?r.json():null).then(data=>{if(Array.isArray(data?.solved)){const next=problemList.filter(p=>data.solved.some((item:{problem_slug:string})=>item.problem_slug===p.slug)).map(p=>p.id);setSolved(next);localStorage.setItem('nexa-solved',JSON.stringify(next))}}).catch(()=>{})},[user,problemList]);
  useEffect(()=>{if(tab!=='Notes'||!user)return;fetch('/api/notes/'+problem.slug,{credentials:'include'}).then(r=>r.ok?r.json():null).then(data=>{if(typeof data?.note?.body==='string'){setNote(data.note.body);localStorage.setItem('note-'+problem.id,data.note.body)}}).catch(()=>{})},[tab,problem,user]);
  const list=problemList.filter(p=>(filter==='All'||p.level===filter)&&`${p.title} ${p.topic}`.toLowerCase().includes(search.toLowerCase()));
  function choose(p:Problem){setProblem(p);setReferenceSolution(null);setReferenceAvailable(false);setCode(localStorage.getItem(`nexa-code-${p.id}-${language}`)||(language==='javascript'?localStorage.getItem('nexa-code-'+p.id):null)||starterFor(language,p.starter));setNote(localStorage.getItem('note-'+p.id)||'');setTab('Description')}
+ async function logout(){if(logoutBusy)return;setLogoutBusy(true);setProfileError('');try{const response=await fetch('/api/auth/logout',{method:'POST',credentials:'include'});if(!response.ok)throw new Error(`Sign out failed (HTTP ${response.status}). Please try again.`);setUser(null);setProfileMenuOpen(false)}catch(error){setProfileError(error instanceof Error?error.message:'Could not sign out. Check your connection and try again.')}finally{setLogoutBusy(false)}}
  async function run(){await runProblemTests()}
- async function runProblemTests(source=code){setCodingPanelMode('normal');setConsoleTab('Test Result');setOutput('Running visible sample tests…');try{const response=await fetch(`/api/problems/${problem.slug}/run`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({language,code:source,stdin:''})});const data=await response.json();if(!response.ok)throw new Error(data.error||'Sample run failed.');if(!data.total){setOutput('No sample test cases are configured for this problem yet.');return false}const results=data.results.map((result:{verdict:string;passed:boolean;input:string;expected:string;actual:string;stderr:string},index:number)=>[`Case ${index+1} · ${result.verdict}`,`Input: ${result.input}`,`Expected: ${result.expected}`,`Output: ${result.actual||'(no output)'}`,result.stderr?`Details: ${result.stderr}`:''].filter(Boolean).join('\n'));setOutput(`Sample tests: ${data.passed}/${data.total} passed\n\n${results.join('\n\n')}`);return data.passed===data.total}catch(e){setOutput(e instanceof Error?e.message:'Could not run sample tests.');return false}}
+ async function runProblemTests(source=code){
+  setCodingPanelMode('normal');setConsoleTab('Test Result');setOutput('Running visible sample tests…');
+  try{
+   const response=await fetch(`/api/problems/${problem.slug}/run`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({language,code:source,stdin:''})}),data=await response.json();
+   if(!response.ok)throw new Error(data.error||'Sample run failed.');
+   if(!data.total){setOutput('No sample test cases are configured for this problem yet.');return false}
+   const results=data.results.map((result:{verdict:string;passed:boolean;input:string;expected:string;actual:string;stderr:string;time?:number|null;memory?:number|null;elapsedTimeMs?:number|null},index:number)=>{
+    const executionTime=result.time==null?'Not reported by runner':result.time<1?(result.time*1000).toFixed(0)+' ms':result.time.toFixed(3)+' s';
+    const runnerDuration=result.time==null?'Runner response duration: '+(result.elapsedTimeMs==null?'Not reported':result.elapsedTimeMs+' ms (includes runner overhead)'):'';
+    return [`Case ${index+1} · ${result.verdict}`,`Execution time: ${executionTime}`,runnerDuration,`Memory: ${result.memory==null?'Not reported':`${result.memory} KB`}`,`Input: ${result.input}`,`Expected: ${result.expected}`,`Output: ${result.actual||'(no output)'}`,result.stderr?`Details: ${result.stderr}`:''].filter(Boolean).join('\n')
+   });
+   setOutput(`Sample tests: ${data.passed}/${data.total} passed\n\n${results.join('\n\n')}`);
+   return data.passed===data.total
+  }catch(e){setOutput(e instanceof Error?e.message:'Could not run sample tests.');return false}
+ }
  async function submit(source=code){if(!user){setAuthOpen(true);return false}setOutput('Checking hidden tests…');const slug=problem.slug;try{const response=await fetch(`/api/problems/${slug}/submit`,{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({language,code:source,stdin:''})});const data=await response.json();if(!response.ok)throw new Error(data.error||'Submission failed.');setOutput(`${data.submission.verdict} · ${data.tests} hidden tests`);setReferenceAvailable(data.submission.verdict==='Accepted');setReferenceSolution(null);if(data.submission.verdict==='Accepted'&&!solved.includes(problem.id)){const next=[...solved,problem.id];setSolved(next);localStorage.setItem('nexa-solved',JSON.stringify(next))}return data.submission.verdict==='Accepted'}catch(e){setOutput(e instanceof Error?e.message:'Could not submit solution.');return false}}
  async function solveWithAi(){if(aiSolveBusy)return;if(!user){setAuthOpen(true);setOutput('Sign in to generate and submit an AI solution.');return}const slug=problem.slug;setAiSolveBusy(true);setOutput('Asking Gemini to solve this problem…');setReferenceAvailable(false);setReferenceSolution(null);try{const response=await fetch('/api/ai/solve',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({problemSlug:slug,language,code})});const data=await response.json() as {solution?:string;error?:string};if(!response.ok||!data.solution)throw new Error(data.error||'Gemini could not generate a solution.');const candidate=data.solution;setCode(candidate);setOutput('Gemini generated a solution. Checking visible tests before submission…');const passesVisible=await runProblemTests(candidate);if(!passesVisible){setOutput(current=>`AI solution was added to the editor but not submitted: visible tests did not all pass or the runner is unavailable.\n${current}`);return}await submit(candidate)}catch(error){setOutput(error instanceof Error?error.message:'Could not generate an AI solution.')}finally{setAiSolveBusy(false)}}
  useEffect(()=>{const key=(e:KeyboardEvent)=>{if((e.ctrlKey||e.metaKey)&&e.key==='Enter'){e.preventDefault();run()}if(e.key==='/'&&!['INPUT','TEXTAREA'].includes((document.activeElement as HTMLElement)?.tagName)){e.preventDefault();document.getElementById('search')?.focus()}};window.addEventListener('keydown',key);return()=>window.removeEventListener('keydown',key)});
  const count=solved.length;
  return (
-  <div className={`app ${theme?'light':''} ${questionsVisible?'':'questions-hidden'}`}>
+  <div className={`app ${theme?'light':''} ${questionsVisible?'':'questions-hidden'} ${['Home','Editor','SQL','Chat','Progress'].includes(view)?'clean-workspace':''}`}>
    <header className="topbar">
     <div className="brand"><span className="brand-mark">N</span>NEXA<span className="brand-muted">CODE</span></div>
     <div className="workspace"><i/> Workspace <span>/</span> {view.toLowerCase()}</div>
     <div className="top-actions">
      <button type="button" aria-label={theme?'Switch to dark theme':'Switch to light theme'} title={theme?'Switch to dark theme':'Switch to light theme'} onClick={()=>setTheme(!theme)}><Icon name="theme"/></button>
      <button type="button" aria-label="Keyboard shortcuts" title="Keyboard shortcuts" onClick={()=>alert('Ctrl or Cmd + Enter runs code; / focuses search')}><Icon name="shortcuts"/></button>
-     <button type="button" className="account-button" title={user?.email||'Sign in'} aria-label={user?.email||'Sign in'} onClick={async()=>{if(user){await fetch('/api/auth/logout',{method:'POST',credentials:'include'});setUser(null)}else setAuthOpen(true)}}>{user?.display_name?.slice(0,2).toUpperCase()||'AK'}</button>
+     <div className="profile-menu-wrap" ref={profileRef}>
+      <button type="button" className="account-button" title={user?.email||'Sign in'} aria-label={user?'Open profile menu':'Sign in'} aria-haspopup={user?'true':undefined} aria-expanded={user?profileMenuOpen:undefined} onClick={()=>{if(user){setProfileError('');setProfileMenuOpen(open=>!open)}else setAuthOpen(true)}}>{user?.display_name?.slice(0,2).toUpperCase()||'N'}</button>
+      {user&&profileMenuOpen&&<section className="profile-menu" aria-label="Profile">
+       <div className="profile-summary"><span className="profile-avatar">{user.display_name?.slice(0,2).toUpperCase()||'N'}</span><div><strong>{user.display_name||'NexaCode learner'}</strong><span>{user.email}</span></div></div>
+       <button type="button" className="profile-progress-link" onClick={()=>{setView('Progress');setProfileMenuOpen(false)}}><Icon name="progress"/> View learning progress <Icon name="arrow-right"/></button>
+       {profileError&&<p className="profile-error" role="alert">{profileError}</p>}
+       <button type="button" className="profile-logout" onClick={()=>void logout()} disabled={logoutBusy}><span aria-hidden="true">↪</span>{logoutBusy?'Signing out…':'Sign out'}</button>
+      </section>}
+     </div>
     </div>
    </header>
    <nav className="activity" aria-label="Workspace navigation">
@@ -79,7 +107,7 @@ export default function App(){
     <div className="streak"><b><Icon name="flame"/></b><span><strong>3 day streak</strong><small>Keep your momentum</small></span><i><Icon name="arrow-right"/></i></div>
    </aside>
    <main className="main">
-    {view==='Practice'?<>
+    {view==='Home'?<HomePage solved={solved.length} total={problemList.length} nextProblem={problemList.find(item=>!solved.includes(item.id))||problemList[0]} displayName={user?.display_name} onOpenPractice={problemId=>{const target=problemList.find(item=>item.id===problemId)||problemList[0];if(target)choose(target);setView('Practice')}} onNavigate={nextView=>setView(nextView)}/>:view==='Practice'?<>
      <div className="view-head">
       <div>Practice <span>/</span> <strong>{problem.topic}</strong></div>
       <div className="head-actions">
@@ -154,12 +182,14 @@ export default function App(){
         aria-valuemin={140}
         aria-valuemax={420}
         aria-valuenow={consoleHeight}
-        aria-valuetext={`Test panel ${consoleHeight} pixels tall`}
+        aria-valuetext={`Test output ${consoleHeight} pixels tall. Use up and down arrow keys to resize.`}
         tabIndex={0}
-        onPointerDown={event=>event.currentTarget.setPointerCapture(event.pointerId)}
-        onPointerMove={event=>{if(event.buttons!==1)return;const bounds=event.currentTarget.parentElement?.getBoundingClientRect();if(bounds)setConsoleHeight(Math.max(140,Math.min(420,Math.round(bounds.bottom-event.clientY))))}}
-        onKeyDown={event=>{if(event.key==='ArrowUp'||event.key==='ArrowDown'){event.preventDefault();setConsoleHeight(value=>Math.max(140,Math.min(420,value+(event.key==='ArrowUp'?10:-10))))}}}
-       ><span/></div>
+        onPointerDown={event=>{consoleDrag.current={pointerId:event.pointerId,startY:event.clientY,startHeight:consoleHeight};event.currentTarget.setPointerCapture(event.pointerId)}}
+        onPointerMove={event=>{const drag=consoleDrag.current;if(!drag||drag.pointerId!==event.pointerId)return;const bounds=event.currentTarget.parentElement?.getBoundingClientRect(),maxHeight=bounds?Math.max(140,Math.min(420,Math.floor(bounds.height-200))):420;setConsoleHeight(Math.max(140,Math.min(maxHeight,Math.round(drag.startHeight+drag.startY-event.clientY))))}}
+        onPointerUp={event=>{if(consoleDrag.current?.pointerId===event.pointerId)consoleDrag.current=null}}
+        onLostPointerCapture={()=>{consoleDrag.current=null}}
+        onKeyDown={event=>{if(event.key==='ArrowUp'||event.key==='ArrowDown'){event.preventDefault();const bounds=event.currentTarget.parentElement?.getBoundingClientRect(),maxHeight=bounds?Math.max(140,Math.min(420,Math.floor(bounds.height-200))):420;setConsoleHeight(value=>Math.max(140,Math.min(maxHeight,value+(event.key==='ArrowUp'?10:-10))))}}}
+       ><span aria-hidden="true"/> <small>Drag up to expand output</small></div>
        <div className="output" style={{height:consoleHeight,flexBasis:consoleHeight}}>
         <div className="output-head">
          <div className="console-tabs" role="tablist" aria-label="Code test panel">
@@ -188,7 +218,7 @@ export default function App(){
        </footer>
       </section>
      </div>
-    </>:view==='Progress'?<ProgressDashboard count={count} total={problemList.length} signedIn={Boolean(user)}/>:view==='SQL'?<SqlWorkbench signedIn={Boolean(user)} onRequireSignIn={()=>setAuthOpen(true)}/>:<Suspense fallback={<div className="editor-loading">Loading workspace…</div>}><StandaloneEditor theme={theme?'nexa-light':'nexa-dark'} onOpenPractice={()=>setView('Practice')}/></Suspense>}
+    </>:view==='Progress'?<ProgressDashboard count={count} total={problemList.length} signedIn={Boolean(user)}/>:view==='SQL'?<SqlWorkbench signedIn={Boolean(user)} onRequireSignIn={()=>setAuthOpen(true)}/>:view==='Chat'?<ChatSection/>:<Suspense fallback={<div className="editor-loading">Loading workspace…</div>}><StandaloneEditor theme={theme?'nexa-light':'nexa-dark'} onOpenPractice={()=>setView('Practice')}/></Suspense>}
    </main>
    {authOpen&&<AuthDialog onClose={()=>setAuthOpen(false)} onUser={setUser}/>}
   </div>

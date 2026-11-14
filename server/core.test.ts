@@ -120,6 +120,46 @@ describe('AI provider errors',()=>{
     expect(result).toMatchObject({stdout:'[0,1]\n',time:'1.200',memory:4,status:{id:3,description:'Accepted'}});
    }finally{globalThis.fetch=originalFetch}
   });
+  it('accepts a separate generous editor execution budget',async()=>{
+   const originalFetch=globalThis.fetch;
+   let requestBody:Record<string,unknown>={};
+   globalThis.fetch=async(input,init)=>{
+    if(String(input).endsWith('/api/v2/runtimes'))return Response.json([{language:'go',version:'1.16.2'}]);
+    requestBody=JSON.parse(String(init?.body)) as Record<string,unknown>;
+    return Response.json({run:{stdout:'done\n',stderr:'',code:0,signal:null}});
+   };
+   try{
+    const result=await executeWithPiston('http://localhost:2000','package main\nfunc main(){}','go','',{runTimeoutMs:30_000,runMemoryLimitBytes:536_870_912});
+    expect(requestBody).toMatchObject({run_timeout:30_000,run_memory_limit:536_870_912});
+    expect(result.status).toMatchObject({id:3,description:'Accepted'});
+   }finally{globalThis.fetch=originalFetch}
+  });
+  it('passes editor source over 300 lines and the extended compilation budget to Piston',async()=>{
+   const originalFetch=globalThis.fetch;
+   let requestBody:Record<string,unknown>={};
+   globalThis.fetch=async(input,init)=>{
+    if(String(input).endsWith('/api/v2/runtimes'))return Response.json([{language:'javascript',version:'20.11.1'}]);
+    requestBody=JSON.parse(String(init?.body)) as Record<string,unknown>;
+    return Response.json({run:{stdout:'ok\n',stderr:'',code:0,signal:null}});
+   };
+   const code=Array.from({length:301},(_,index)=>`const value${index} = "${'x'.repeat(220)}";`).join('\n');
+   try{
+    const result=await executeWithPiston('http://localhost:2000',code,'javascript','',{
+     compileTimeoutMs:60_000,
+     runTimeoutMs:30_000,
+     runMemoryLimitBytes:536_870_912
+    });
+    const files=requestBody.files as {content:string}[];
+    expect(code.length).toBeGreaterThan(64*1024);
+    expect(files[0].content.split('\n')).toHaveLength(301);
+    expect(requestBody).toMatchObject({
+     compile_timeout:60_000,
+     run_timeout:30_000,
+     run_memory_limit:536_870_912
+    });
+    expect(result.status).toMatchObject({id:3,description:'Accepted'});
+   }finally{globalThis.fetch=originalFetch}
+  });
   it('does not report successful compiler banners as compiler errors',async()=>{
    const originalFetch=globalThis.fetch;
    globalThis.fetch=async(input)=>{
@@ -183,6 +223,42 @@ describe('AI provider errors',()=>{
      exit_code:null,
      memory:null,
      status:{id:6,description:'Compilation Error'}
+    });
+   }finally{globalThis.fetch=originalFetch}
+  });
+  it('preserves Piston time-limit details when Go execution is killed',async()=>{
+   const originalFetch=globalThis.fetch;
+   globalThis.fetch=async(input)=>{
+    if(String(input).endsWith('/api/v2/runtimes'))return Response.json([{language:'go',version:'1.16.2'}]);
+    return Response.json({
+     run:{stdout:'',stderr:'',code:null,signal:'SIGKILL',memory:25_032_000,wall_time:4_803,message:'Time limit exceeded',status:'TO'}
+    });
+   };
+   try{
+    const result=await executeWithPiston('http://localhost:2000','package main\nfunc main(){ for {} }','go','');
+    expect(result).toMatchObject({
+     runner_message:'Time limit exceeded',
+     runner_status:'TO',
+     signal:'SIGKILL',
+     time:'4.803',
+     status:{id:5,description:'Time Limit Exceeded'}
+    });
+   }finally{globalThis.fetch=originalFetch}
+  });
+  it('reports memory-limit failures separately from timeouts',async()=>{
+   const originalFetch=globalThis.fetch;
+   globalThis.fetch=async(input)=>{
+    if(String(input).endsWith('/api/v2/runtimes'))return Response.json([{language:'go',version:'1.16.2'}]);
+    return Response.json({
+     run:{stdout:'',stderr:'',code:null,signal:'SIGKILL',memory:134_217_728,wall_time:250,message:'Memory limit exceeded',status:'SG'}
+    });
+   };
+   try{
+    const result=await executeWithPiston('http://localhost:2000','package main\nfunc main(){}','go','');
+    expect(result).toMatchObject({
+     runner_message:'Memory limit exceeded',
+     runner_status:'SG',
+     status:{id:13,description:'Memory Limit Exceeded'}
     });
    }finally{globalThis.fetch=originalFetch}
   });

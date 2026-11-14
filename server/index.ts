@@ -18,14 +18,17 @@ import { outputsMatch } from './problem-grading.js';
 import { prepareProblemTestRun } from './problem-grading.js';
 import { problemCases } from './problem-tests.js';
 import { callTutorMcpTool, parseTutorMcpToolInput, requireExplicitApproval } from './mcp-client.js';
-import { executeWithPiston } from './piston-runner.js';
+import { executeWithPiston, type RunnerExecutionLimits } from './piston-runner.js';
+import { createFreeModelCompletion, FreeModelError, listFreeModelModels } from './freemodel.js';
+import { registerGoogleOAuthRoutes } from './google-oauth.js';
 const { Pool } = pg;
 const app=express();
 const port=Number(process.env.PORT||4000);
 const origin=process.env.WEB_ORIGIN||'http://localhost:5173';
-const pool=process.env.DATABASE_URL?new Pool({connectionString:process.env.DATABASE_URL}):null;
+const pool=process.env.DATABASE_URL?new Pool({connectionString:process.env.DATABASE_URL,connectionTimeoutMillis:5_000,query_timeout:15_000}):null;
 const secret=process.env.JWT_SECRET||'local-development-only-change-before-deploying';
-app.disable('x-powered-by');app.use(helmet());app.use(cors({origin,credentials:true}));app.use(express.json({limit:'128kb'}));
+let googleAuthSchemaReady:Promise<void>|undefined;
+app.disable('x-powered-by');app.use(helmet());app.use(cors({origin,credentials:true}));app.use(express.json({limit:'1mb'}));
 app.use('/api',rateLimit({windowMs:60_000,limit:120,standardHeaders:true,legacyHeaders:false}));
 const runLimit=rateLimit({
  windowMs:60_000,
@@ -35,25 +38,52 @@ const runLimit=rateLimit({
  handler:(_req,res)=>res.status(429).json({error:'Execution limit reached (12 runs per minute). Please wait and try again.'})
 });
 const LANGUAGES:Record<string,number>={javascript:63,typescript:74,python:71,java:62,c:50,cpp:54,csharp:51,go:60,rust:73,php:68,ruby:72,kotlin:78};
+type ExecutionProfile=RunnerExecutionLimits&{cpuTimeLimitSeconds?:number;memoryLimitKb?:number};
+const editorExecutionProfile:ExecutionProfile={compileTimeoutMs:60_000,runTimeoutMs:30_000,runMemoryLimitBytes:536_870_912,cpuTimeLimitSeconds:30,memoryLimitKb:524_288};
 const tokenCookie={httpOnly:true,sameSite:'lax' as const,secure:process.env.NODE_ENV==='production',path:'/',maxAge:7*24*60*60*1000};
 function db(){if(!pool)throw Object.assign(new Error('Database is not configured. Copy .env.example to .env and start PostgreSQL.'),{status:503});return pool}
+function ensureGoogleAuthSchema(){if(!pool)throw Object.assign(new Error('Database is not configured.'),{status:503});googleAuthSchemaReady??=pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id TEXT UNIQUE').then(()=>undefined);return googleAuthSchemaReady}
 function auth(req:Request,res:Response,next:NextFunction){const token=decodeURIComponent(req.headers.cookie?.split(';').map(v=>v.trim()).find(v=>v.startsWith('nexa_session='))?.slice('nexa_session='.length)||'')||undefined;if(!token){const raw=req.headers.authorization?.replace(/^Bearer /,'');if(!raw){res.status(401).json({error:'Sign in to continue.'});return}try{(req as Request&{user:{id:string}}).user=jwt.verify(raw,secret) as {id:string};next();return}catch{res.status(401).json({error:'Session expired.'});return}}try{(req as Request&{user:{id:string}}).user=jwt.verify(token,secret) as {id:string};next()}catch{res.status(401).json({error:'Session expired.'})}}
 function userId(req:Request){return (req as Request&{user:{id:string}}).user.id}
 const credentials=z.object({email:z.string().email().max(254),password:z.string().min(8).max(128)});
 app.get('/api/health',async(_req,res)=>{let database='not-configured';if(pool)try{await pool.query('SELECT 1');database='ready'}catch{database='unavailable'}let runnerStatus='not-configured';const runner=process.env.CODE_RUNNER==='piston'&&process.env.NODE_ENV!=='production'?'piston':'judge0';const runnerUrl=runner==='piston'?process.env.PISTON_URL:process.env.JUDGE0_URL;if(runnerUrl)try{const headers:Record<string,string>={};if(runner==='judge0'&&process.env.JUDGE0_AUTH_TOKEN)headers['X-Auth-Token']=process.env.JUDGE0_AUTH_TOKEN;const path=runner==='piston'?'/api/v2/runtimes':'/languages';const response=await fetch(`${runnerUrl.replace(/\/$/,'')}${path}`,{headers,signal:AbortSignal.timeout(3000)});runnerStatus=response.ok?'ready':'unavailable'}catch{runnerStatus='unavailable'}res.json({ok:true,database,judge0:runner==='judge0'?runnerStatus:'not-configured',runner,runnerStatus})});
 app.get('/api/auth/github/status',(_req,res)=>res.json({configured:Boolean(process.env.GITHUB_CLIENT_ID&&process.env.GITHUB_CLIENT_SECRET&&process.env.GITHUB_CALLBACK_URL)}));
+registerGoogleOAuthRoutes(app,{db,ensureSchema:ensureGoogleAuthSchema,origin,secret});
 const tutorLimit=rateLimit({windowMs:60_000,limit:8,standardHeaders:true,legacyHeaders:false});
 const aiSolveLimit=rateLimit({windowMs:60_000,limit:3,standardHeaders:true,legacyHeaders:false});
+const chatLimit=rateLimit({windowMs:60_000,limit:15,standardHeaders:true,legacyHeaders:false});
 app.get('/api/ai/status',async(_req,res)=>{
  const provider=process.env.RAG_PROVIDER==='ollama'?'ollama':process.env.RAG_PROVIDER==='google'?'google-gemini':'openai-compatible';
  const configured=provider==='ollama'||Boolean(provider==='google-gemini'?process.env.GOOGLE_AI_API_KEY:process.env.AI_API_KEY);
+ const solverConfigured=Boolean(process.env.GOOGLE_AI_API_KEY);
  let knowledgeBase:'ready'|'empty'|'unavailable'='unavailable';
  if(pool)try{
   const result=await pool.query<{ready:boolean}>('SELECT EXISTS(SELECT 1 FROM knowledge_chunks) AS ready');
   knowledgeBase=result.rows[0]?.ready?'ready':'empty';
  }catch{knowledgeBase='unavailable'}
  const ready=configured&&knowledgeBase==='ready';
- res.status(ready?200:503).json({ready,provider,knowledgeBase,configured});
+ res.status(ready?200:503).json({ready,provider,knowledgeBase,configured,solverConfigured});
+});
+app.get('/api/chat/models',chatLimit,async(_req,res,next)=>{
+ try{res.json({models:await listFreeModelModels()})}catch(error){next(error)}
+});
+const chatRequestSchema=z.object({
+ model:z.string().trim().min(1).max(200),
+ messages:z.array(z.object({
+  role:z.enum(['user','assistant']),
+  content:z.string().trim().min(1).max(8_000)
+ })).min(1).max(20)
+}).superRefine((input,context)=>{
+ if(input.messages.at(-1)?.role!=='user')context.addIssue({code:'custom',path:['messages'],message:'The latest chat message must be from the user.'});
+ if(input.messages.reduce((total,message)=>total+message.content.length,0)>20_000)context.addIssue({code:'custom',path:['messages'],message:'Chat history is too long. Start a new conversation or shorten older messages.'});
+});
+app.post('/api/chat/completions',chatLimit,async(req,res,next)=>{
+ try{
+  const input=chatRequestSchema.parse(req.body);
+  const models=await listFreeModelModels();
+  if(!models.includes(input.model)){res.status(400).json({error:'That model is not in the current FreeModel catalog. Refresh the model list and try again.'});return}
+  res.json({message:await createFreeModelCompletion(input.model,input.messages)});
+ }catch(error){next(error)}
 });
 app.post('/api/ai/ask',auth,tutorLimit,async(req,res,next)=>{try{
  const input=z.object({question:z.string().trim().min(1).max(2000),problemSlug:z.string().regex(/^[a-z0-9-]{1,100}$/).optional(),code:z.string().max(16000).optional(),language:z.string().max(30).optional(),lastRunOutput:z.string().max(4000).optional()}).parse(req.body);
@@ -164,18 +194,18 @@ app.post('/api/bookmarks/:slug',auth,async(req,res,next)=>{try{const slug=z.stri
 app.delete('/api/bookmarks/:slug',auth,async(req,res,next)=>{try{await db().query('DELETE FROM bookmarks WHERE user_id=$1 AND problem_slug=$2',[userId(req),req.params.slug]);res.status(204).end()}catch(e){next(e)}});
 app.get('/api/notes/:slug',auth,async(req,res,next)=>{try{const r=await db().query('SELECT body,updated_at FROM notes WHERE user_id=$1 AND problem_slug=$2',[userId(req),req.params.slug]);res.json({note:r.rows[0]||{body:''}})}catch(e){next(e)}});
 app.put('/api/notes/:slug',auth,async(req,res,next)=>{try{const {body}=z.object({body:z.string().max(20000)}).parse(req.body);const r=await db().query('INSERT INTO notes(user_id,problem_slug,body) VALUES($1,$2,$3) ON CONFLICT(user_id,problem_slug) DO UPDATE SET body=EXCLUDED.body,updated_at=now() RETURNING body,updated_at',[userId(req),req.params.slug,body]);res.json({note:r.rows[0]})}catch(e){next(e)}});
-const runSchema=z.object({language:z.enum(Object.keys(LANGUAGES) as [string,...string[]]),code:z.string().min(1).max(64*1024),stdin:z.string().max(10*1024).default('')});
-async function judgeWithJudge0(code:string,language:string,stdin:string){
+const runSchema=z.object({language:z.enum(Object.keys(LANGUAGES) as [string,...string[]]),code:z.string().min(1).max(256*1024),stdin:z.string().max(10*1024).default('')});
+async function judgeWithJudge0(code:string,language:string,stdin:string,profile:ExecutionProfile={}){
  const base=process.env.JUDGE0_URL;
  if(!base)throw Object.assign(new Error('Code execution is not configured. Start Judge0 or configure the local Piston runner.'),{status:503});
  const headers:Record<string,string>={'Content-Type':'application/json'};
  if(process.env.JUDGE0_AUTH_TOKEN)headers['X-Auth-Token']=process.env.JUDGE0_AUTH_TOKEN;
  let response:globalThis.Response;
  try{
-  response=await fetch(`${base.replace(/\/$/,'')}/submissions?base64_encoded=false&wait=true`,{method:'POST',headers,signal:AbortSignal.timeout(75_000),body:JSON.stringify({source_code:code,language_id:LANGUAGES[language],stdin,cpu_time_limit:5,memory_limit:128000})});
+  response=await fetch(`${base.replace(/\/$/,'')}/submissions?base64_encoded=false&wait=true`,{method:'POST',headers,signal:AbortSignal.timeout(75_000),body:JSON.stringify({source_code:code,language_id:LANGUAGES[language],stdin,cpu_time_limit:profile.cpuTimeLimitSeconds??5,memory_limit:profile.memoryLimitKb??128000})});
  }catch(error){
   const timedOut=error instanceof Error&&error.name==='TimeoutError';
-  throw Object.assign(new Error(timedOut?'The code runner timed out. Check that Judge0 is healthy and retry.':'Could not reach Judge0. Check that it is running and JUDGE0_URL is correct.'),{status:503});
+  throw Object.assign(new Error(timedOut?'The code runner timed out. Check that Judge0 is healthy and retry.':'Could not reach Judge0. Check that it is running and JUDGE0_URL is correct.'),{status:503,code:'RUNNER_UNAVAILABLE'});
  }
  if(!response.ok)throw Object.assign(new Error(`Judge0 returned HTTP ${response.status}. Check the runner service and authentication configuration.`),{status:response.status>=500?503:502});
  try{
@@ -184,21 +214,22 @@ async function judgeWithJudge0(code:string,language:string,stdin:string){
   throw Object.assign(new Error('Judge0 returned an invalid response. Check the runner service logs.'),{status:502});
  }
 }
-async function judge(code:string,language:string,stdin:string){if(process.env.CODE_RUNNER==='piston'&&process.env.NODE_ENV!=='production'){const base=process.env.PISTON_URL;if(!base){if(process.env.JUDGE0_URL)return judgeWithJudge0(code,language,stdin);throw Object.assign(new Error('Set PISTON_URL to enable the local code runner.'),{status:503});}try{return await executeWithPiston(base,code,language,stdin)}catch(error){const status=typeof error==='object'&&error!==null&&'status' in error?Number((error as {status?:number}).status):undefined;if(process.env.JUDGE0_URL&&(status===422||status===503||status===502||!status))return judgeWithJudge0(code,language,stdin);throw error}}return judgeWithJudge0(code,language,stdin)}
-function verdict(id:number|undefined){if(id===3)return 'Accepted';if(id===4)return 'Wrong Answer';if(id===5)return 'Time Limit Exceeded';if(id===6)return 'Compile Error';if(id&&id>=7&&id<=12)return 'Runtime Error';return 'Processing'}
-async function evaluateTests(slug:string,code:string,language:string,hidden:boolean|null){const cases=await db().query('SELECT stdin,expected_output FROM test_cases WHERE problem_slug=$1 AND ($2::boolean IS NULL OR hidden=$2) ORDER BY id',[slug,hidden]);const results=[];for(const test of cases.rows){const prepared=prepareProblemTestRun(slug,code,language,test.stdin),run=await judge(prepared.code,language,prepared.stdin),mapped=verdict(run.status?.id),lines=(run.stdout||'').trim().split(/\r?\n/).filter(Boolean),actual=lines.at(-1)||'';let passed=false;try{passed=mapped==='Accepted'&&outputsMatch(slug,JSON.parse(actual),JSON.parse(test.expected_output),test.stdin)}catch{passed=mapped==='Accepted'&&actual.trim()===String(test.expected_output).trim()}results.push({verdict:passed?'Accepted':mapped==='Accepted'?'Wrong Answer':mapped,passed,input:test.stdin,expected:test.expected_output,actual,stderr:run.stderr||run.compile_output||''})}return results}
+async function judge(code:string,language:string,stdin:string,profile:ExecutionProfile={}){if(process.env.CODE_RUNNER==='piston'&&process.env.NODE_ENV!=='production'){const base=process.env.PISTON_URL;if(!base){if(process.env.JUDGE0_URL)return judgeWithJudge0(code,language,stdin,profile);throw Object.assign(new Error('Set PISTON_URL to enable the local code runner.'),{status:503});}try{return await executeWithPiston(base,code,language,stdin,profile)}catch(error){const status=typeof error==='object'&&error!==null&&'status' in error?Number((error as {status?:number}).status):undefined;if(process.env.JUDGE0_URL&&(status===422||status===503||status===502||!status))return judgeWithJudge0(code,language,stdin,profile);throw error}}return judgeWithJudge0(code,language,stdin,profile)}
+function verdict(id:number|undefined){if(id===3)return 'Accepted';if(id===4)return 'Wrong Answer';if(id===5)return 'Time Limit Exceeded';if(id===6)return 'Compile Error';if(id===13)return 'Memory Limit Exceeded';if(id&&id>=7&&id<=12)return 'Runtime Error';return 'Processing'}
+async function evaluateTests(slug:string,code:string,language:string,hidden:boolean|null){const cases=await db().query('SELECT stdin,expected_output FROM test_cases WHERE problem_slug=$1 AND ($2::boolean IS NULL OR hidden=$2) ORDER BY id',[slug,hidden]);const results=[];for(const test of cases.rows){const prepared=prepareProblemTestRun(slug,code,language,test.stdin),startedAt=performance.now(),run=await judge(prepared.code,language,prepared.stdin),elapsedTimeMs=Math.round(performance.now()-startedAt),mapped=verdict(run.status?.id),lines=(run.stdout||'').trim().split(/\r?\n/).filter(Boolean),actual=lines.at(-1)||'';let passed=false;try{passed=mapped==='Accepted'&&outputsMatch(slug,JSON.parse(actual),JSON.parse(test.expected_output),test.stdin)}catch{passed=mapped==='Accepted'&&actual.trim()===String(test.expected_output).trim()}const runtime=run.time==null?null:Number(run.time);results.push({verdict:passed?'Accepted':mapped==='Accepted'?'Wrong Answer':mapped,passed,input:test.stdin,expected:test.expected_output,actual,stderr:run.stderr||run.compile_output||'',time:runtime!==null&&Number.isFinite(runtime)?runtime:null,memory:run.memory??null,elapsedTimeMs})}return results}
 app.post('/api/problems/:slug/run',runLimit,async(req,res,next)=>{try{const input=runSchema.parse(req.body),slug=z.string().regex(/^[a-z0-9-]{1,100}$/).parse(req.params.slug),results=await evaluateTests(slug,input.code,input.language,false);res.json({results,passed:results.filter(item=>item.passed).length,total:results.length})}catch(error){next(error)}});
-app.post('/api/run',runLimit,async(req,res,next)=>{try{const input=runSchema.parse(req.body),result=await judge(input.code,input.language,input.stdin),statusId=result.status?.id;res.json({verdict:verdict(statusId),stdout:result.stdout||'',stderr:result.stderr||'',compileOutput:result.compile_output||'',compileStdout:'compile_stdout' in result?result.compile_stdout||'':'',compileStderr:'compile_stderr' in result?result.compile_stderr||'':'',compileTime:'compile_time' in result?result.compile_time:null,compileExitCode:'compile_exit_code' in result?result.compile_exit_code:null,compileStatus:'compile_status' in result?result.compile_status:statusId===6?'failed':'not-reported',runtimeTime:result.time??null,exitCode:'exit_code' in result?result.exit_code:null,signal:'signal' in result?result.signal:null,memory:result.memory??null,status:result.status?.description})}catch(error){next(error)}});
+app.post('/api/run',runLimit,async(req,res,next)=>{try{const input=runSchema.parse(req.body),result=await judge(input.code,input.language,input.stdin,editorExecutionProfile),statusId=result.status?.id,stoppedBySandbox=statusId===5||statusId===13;res.json({verdict:stoppedBySandbox?'Execution Stopped':verdict(statusId),stdout:result.stdout||'',stderr:result.stderr||'',compileOutput:result.compile_output||'',compileStdout:'compile_stdout' in result?result.compile_stdout||'':'',compileStderr:'compile_stderr' in result?result.compile_stderr||'':'',compileTime:'compile_time' in result?result.compile_time:null,compileExitCode:'compile_exit_code' in result?result.compile_exit_code:null,compileStatus:'compile_status' in result?result.compile_status:statusId===6?'failed':'not-reported',runtimeTime:result.time??null,exitCode:'exit_code' in result?result.exit_code:null,signal:'signal' in result?result.signal:null,memory:result.memory??null,runnerMessage:'runner_message' in result?result.runner_message:null,runnerStatus:'runner_status' in result?result.runner_status:null,status:stoppedBySandbox?'Execution stopped by editor sandbox safety limits.':result.status?.description})}catch(error){next(error)}});
 app.post('/api/problems/:slug/submit',auth,runLimit,async(req,res,next)=>{try{const input=runSchema.parse(req.body),slug=z.string().regex(/^[a-z0-9-]{1,100}$/).parse(req.params.slug),results=await evaluateTests(slug,input.code,input.language,null);if(!results.length){res.status(422).json({error:'This problem does not have test cases configured yet.'});return}const failed=results.find(item=>!item.passed),final=failed?.verdict||'Accepted',saved=await db().query('INSERT INTO submissions(user_id,problem_slug,language,source_code,verdict,stdout,stderr) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id,verdict,stdout,stderr,created_at',[userId(req),slug,input.language,input.code,final,failed?.actual||'',failed?.stderr||'']);res.json({submission:saved.rows[0],tests:results.length,passed:results.filter(item=>item.passed).length,results})}catch(error){next(error)}});
 app.use((err:unknown,req:Request,res:Response,_next:NextFunction)=>{
  if(err instanceof z.ZodError){res.status(400).json({error:'Invalid request.',details:err.issues.map(issue=>({path:issue.path,message:issue.message}))});return}
  const object=typeof err==='object'&&err!==null?err as {status?:number;code?:string}:{};
  if(object.code==='23505'){res.status(409).json({error:'That email is already registered.'});return}
  const databaseUnavailable=typeof object.code==='string'&&/^(08|57P01|57P02|57P03|53300|53400)/.test(object.code);
+ const runnerUnavailable=object.code==='RUNNER_UNAVAILABLE';
  const networkUnavailable=typeof object.code==='string'&&['ECONNREFUSED','ECONNRESET','ETIMEDOUT','ENOTFOUND','EAI_AGAIN'].includes(object.code);
- const status=databaseUnavailable||networkUnavailable?503:object.status||500;
+ const status=databaseUnavailable||networkUnavailable||runnerUnavailable?503:object.status||500;
  const requestId=randomUUID();
- const message=status>=500?(status===503?'A required service is temporarily unavailable. Check the API and database, then retry.':'Unexpected server error.') : err instanceof Error?err.message:'Request failed.';
+ const message=runnerUnavailable&&err instanceof Error?err.message:err instanceof FreeModelError?err.message:status>=500?(status===503?'A required service is temporarily unavailable. Check the API and database, then retry.':'Unexpected server error.') : err instanceof Error?err.message:'Request failed.';
  if(status>=500)console.error(JSON.stringify({requestId,method:req.method,path:req.path,status,code:object.code,message:err instanceof Error?err.message:'Unknown server error',stack:err instanceof Error?err.stack:undefined}));
  res.status(status).json({error:message,...(status>=500?{requestId}:{})});
 });

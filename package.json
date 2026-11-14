@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "concurrently -n api,web -c cyan,green npm:dev:api npm:dev:web",
-    "dev:api": "npm run build:api && node --watch-path=server dist-server/index.js",
+    "dev:api": "npm run build:api && node --watch-path=server scripts/dev-api.mjs",
     "dev:web": "vite",
     "build": "npm run build:api && npm run build:web",
     "build:api": "tsc -p tsconfig.server.json",
@@ -53,4 +53,3 @@
     "vitest": "^5.0.5"
   }
 }
-
